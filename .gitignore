@@ -1,0 +1,27 @@
+.next/
+node_modules/
+.env
+.env.dev
+.env.prod
+.env.local
+.env.backup
+.env_org
+.env.backupOrg
+.vscode
+tmp/
+*Zone.Identifier
+.vercel
+supabase.txt
+tsconfig.tsbuildinfo
+app/login/supa_tokens.txt
+npm_output.log
+prisma/temp_db.txt
+
+# Local workspace links
+/.extensionMain
+/.leadmaestroServer
+/capsWeb
+/.capsWeb
+
+# Generated files
+app/lib/page-versions.json
