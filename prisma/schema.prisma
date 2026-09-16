@@ -1,0 +1,1060 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model tblworktemplate {
+  TemplateID   Int          @id(map: "WorkTemplate_pkey") @default(autoincrement())
+  TemplateName String       @db.VarChar(100)
+  StartTime    DateTime     @db.Time(6)
+  EndTime      DateTime     @db.Time(6)
+  DefaultHours Int?
+  AccID        BigInt?
+  isactive     Boolean      @default(true)
+  tblworklog   tblworklog[]
+  tblaccount   tblaccount?  @relation(fields: [AccID], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_WorkTemplate_Account")
+
+  @@map("tblworktemplate")
+}
+
+model tbl_user_history {
+  id        BigInt   @id @default(autoincrement())
+  user_id   BigInt
+  item_id   String   @db.VarChar(50)
+  path      String   @db.VarChar(255)
+  hdatetime DateTime @default(now()) @db.Timestamp(6)
+
+  @@map("tbl_user_history")
+}
+
+model tbluser {
+  id                       BigInt                     @id @default(autoincrement())
+  email                    String                     @unique(map: "uq_tbluser_email") @db.VarChar(60)
+  fname                    String?                    @db.VarChar(30)
+  lname                    String?                    @db.VarChar(30)
+  created                  DateTime                   @default(now()) @db.Timestamptz(6)
+  profile_picture          String?                    @map("profile_picture")
+  access_level             Int                        @default(99) @map("access_level") @db.SmallInt
+  password                 String?                    @db.VarChar(255)
+  last_activity            DateTime                   @default(now()) @map("last_activity") @db.Timestamptz(6)
+  failed_login_attempts    Int                        @default(0) @map("failed_login_attempts") @db.SmallInt
+  account_locked_until     DateTime?                  @map("account_locked_until") @db.Timestamptz(6)
+  tbl_password_reset_token tbl_password_reset_token[]
+  tblaccountuser           tblaccountuser[]
+  sent_messages            tblmessagedelivery[]       @relation("MessageSender")
+  received_messages        tblmessagedelivery[]       @relation("MessageRecipient")
+  tblrental_order_owner_checklist tblrental_order_owner_checklist[]
+
+  @@map("tbluser")
+}
+
+model tblaccount {
+  id                         BigInt                       @id @default(autoincrement())
+  name                       String?                      @db.VarChar(30)
+  subscription_expire        DateTime                     @db.Timestamptz(6)
+  subscription_plan_id       Int?
+  created                    DateTime                     @default(now()) @db.Timestamptz(6)
+  last_activity              DateTime                     @default(now()) @map("last_activity") @db.Timestamptz(6)
+  company_name               String?                      @map("company_name") @db.VarChar(255)
+  company_address            String?                      @map("company_address") @db.VarChar(500)
+  company_email              String?                      @map("company_email") @db.VarChar(255)
+  org_number                 String?                      @map("org_number") @db.VarChar(50)
+  company_phone              String?                      @map("company_phone") @db.VarChar(50)
+  tblaccountuser             tblaccountuser[]
+  tblchecklisttemplate       tblchecklisttemplate[]
+  tblinvitation              tblinvitation[]
+  tblworktemplate            tblworktemplate[]
+  tblcustomers               tblcustomers[]
+  tblkey                     tblkey[]
+  tblmessagedelivery         tblmessagedelivery[]
+  tblregistrationpayment     tblregistrationpayment[]
+  tblcar                     tblcar[]
+  tblrental_order            tblrental_order[]
+  tblrental_order_event      tblrental_order_event[]
+  tblrental_order_contract   tblrental_order_contract[]
+  tblrental_order_contract_acceptance tblrental_order_contract_acceptance[]
+  tblpickup_order            tblpickup_order[]
+  tblworkorder_goods_type    tblworkorder_goods_type[]
+  tblworkorder_goods_size    tblworkorder_goods_size[]
+  tblworkorder_order_type    tblworkorder_order_type[]
+  tblworkorder_worklog       tblworkorder_worklog[]
+  tblworkorder_contract      tblworkorder_contract[]
+  tblworkorder_gallery_image tblworkorder_gallery_image[]
+  tblworkorder_gallery_share tblworkorder_gallery_share[]
+  tblreceipt_template        tblreceipt_template[]
+  tblscanned_receipt         tblscanned_receipt[]
+  tblsubscriptionplan        tblsubscriptionplan?         @relation(fields: [subscription_plan_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("tblaccount")
+}
+
+model tblregistrationpayment {
+  id                    BigInt    @id @default(autoincrement())
+  email                 String    @db.VarChar(255)
+  account_id            BigInt?
+  plan_id               Int
+  amount                Decimal   @db.Decimal(10, 2)
+  currency              String    @db.VarChar(3)
+  paypal_order_id       String?   @unique @db.VarChar(100)
+  paypal_capture_id     String?   @unique @db.VarChar(100)
+  paypal_transaction_id String?   @unique @db.VarChar(100)
+  status                String    @default("PENDING") @db.VarChar(20)
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  paid_at               DateTime? @db.Timestamptz(6)
+
+  tblaccount tblaccount? @relation(fields: [account_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  tblsubscriptionplan tblsubscriptionplan @relation(fields: [plan_id], references: [id], onDelete: NoAction, onUpdate: Cascade)
+
+  @@index([account_id])
+  @@index([email])
+  @@index([plan_id])
+  @@index([status, created_at])
+  @@map("tblregistrationpayment")
+}
+
+model tblaccountuser {
+  account_id   BigInt
+  user_id      BigInt
+  access_level Int?       @db.SmallInt
+  tblaccount   tblaccount @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_accountuser_account")
+  tbluser      tbluser    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_accountuser_user")
+
+  @@id([account_id, user_id])
+  @@map("tblaccountuser")
+}
+
+model tblchecklisttemplate {
+  clid                      Int                         @id @default(autoincrement())
+  clname                    String                      @db.VarChar(255)
+  claccid                   BigInt
+  createdby                 Int
+  createdat                 DateTime?                   @default(now()) @db.Timestamp(6)
+  isactive                  Boolean?                    @default(true)
+  receipt_template_id       Int? // Links to receipt scan template for auto-fill
+  tblaccount                tblaccount                  @relation(fields: [claccid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_account")
+  tblemployee               tblemployee                 @relation(fields: [createdby], references: [employeeid], onDelete: NoAction, onUpdate: NoAction, map: "fk_employee")
+  tblreceipt_template       tblreceipt_template?        @relation(fields: [receipt_template_id], references: [id], onDelete: SetNull)
+  tblchecklisttemplateitem  tblchecklisttemplateitem[]
+  tbluser_checklist_session tbluser_checklist_session[]
+
+  @@index([receipt_template_id])
+  @@map("tblchecklisttemplate")
+}
+
+model tblchecklisttemplateitem {
+  itemid                Int       @id @default(autoincrement())
+  clid                  Int
+  taskname              String    @db.VarChar(500)
+  taskdescription       String?
+  sortorder             Int?      @default(0)
+  isrequired            Boolean?  @default(true)
+  requiresphoto         Boolean?  @default(false)
+  photooptional         Boolean?  @default(false)
+  isreporting           Boolean?  @default(false)
+  deleted_at            DateTime? @db.Timestamp(6)
+  field_type            String?   @default("checkbox") @db.VarChar(20) // checkbox, text, number, date, receipt_upload
+  receipt_field_mapping String?   @db.VarChar(100) // Maps to receipt template field_name for auto-fill
+  default_value         String?   @db.VarChar(255)
+  placeholder           String?   @db.VarChar(255)
+  unit                  String?   @db.VarChar(50) // Unit of measurement (km, liters, kg)
+
+  tblchecklisttemplate   tblchecklisttemplate     @relation(fields: [clid], references: [clid], onDelete: Cascade, onUpdate: NoAction, map: "fk_checklisttemplate")
+  tbluser_checklist_item tbluser_checklist_item[]
+
+  @@index([clid, deleted_at])
+  @@map("tblchecklisttemplateitem")
+}
+
+model tblemailverification {
+  id       BigInt   @id @default(autoincrement())
+  email    String
+  otp      String
+  expires  DateTime @default(now()) @db.Timestamptz(6)
+  verified Int      @default(0)
+  created  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("tblemailverification")
+}
+
+model tblemployee {
+  employeeid                Int                         @id(map: "employee_pkey") @default(autoincrement())
+  firstname                 String                      @db.VarChar(100)
+  lastname                  String                      @db.VarChar(100)
+  email                     String                      @db.VarChar(150)
+  createdat                 DateTime?                   @default(now()) @db.Timestamp(6)
+  lvlaccess                 Int?
+  empadress1                String?                     @db.VarChar(30)
+  empadress2                String?                     @db.VarChar(30)
+  tblchecklisttemplate      tblchecklisttemplate[]
+  tbluser_checklist_session tbluser_checklist_session[]
+  tblworklog                tblworklog[]
+  tblchecklist_order        tblchecklist_order[]
+  pickup_orders_performed   tblpickup_order[]           @relation("PerformedBy")
+  pickup_orders_assigned    tblpickup_order[]           @relation("AssignedTo")
+  tblworkorder_worklog      tblworkorder_worklog[]
+  tblreceipt_template       tblreceipt_template[]
+  tblscanned_receipt        tblscanned_receipt[]
+
+  @@map("tblemployee")
+}
+
+model tblinvitation {
+  id         BigInt     @id @default(autoincrement())
+  email      String     @db.VarChar(60)
+  account_id BigInt
+  created    DateTime   @default(now()) @db.Timestamptz(6)
+  expires    DateTime   @default(dbgenerated("(now() + '14 days'::interval)")) @db.Timestamptz(6)
+  status     String?    @db.VarChar(20)
+  role       Int?       @db.SmallInt
+  tblaccount tblaccount @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([email], map: "ix_tblinvitations_email")
+  @@map("tblinvitation")
+}
+
+model tbl_password_reset_token {
+  id      BigInt   @id @default(autoincrement())
+  user_id BigInt
+  token   String   @unique(map: "tblpasswordresettoken_token_key") @db.VarChar(1000)
+  expires DateTime @db.Timestamp(0)
+  tbluser tbluser  @relation(fields: [user_id], references: [id], onDelete: Cascade, map: "tblpasswordresettoken_user_id_fkey")
+
+  @@map("tbl_password_reset_token")
+}
+
+model tbluser_checklist_item {
+  useritemid                Int                       @id @default(autoincrement())
+  sessionid                 Int
+  itemid                    Int
+  ischecked                 Boolean?                  @default(false)
+  checkedat                 DateTime?                 @db.Timestamp(6)
+  isoperative               Boolean?                  @default(false)
+  notes                     String?
+  photourl                  String?
+  input_value               String?                   @db.VarChar(500) // Actual value for text/number/date fields
+  is_auto_filled            Boolean?                  @default(false) // True if value came from receipt scan
+  auto_fill_confidence      Decimal?                  @db.Decimal(5, 2) // OCR confidence 0-100 if auto-filled
+  tblchecklisttemplateitem  tblchecklisttemplateitem  @relation(fields: [itemid], references: [itemid], onDelete: NoAction, onUpdate: NoAction, map: "user_checklist_item_itemid_fkey")
+  tbluser_checklist_session tbluser_checklist_session @relation(fields: [sessionid], references: [sessionid], onDelete: Cascade, onUpdate: NoAction, map: "user_checklist_item_sessionid_fkey")
+  tblchecklist_order_item   tblchecklist_order_item[]
+
+  @@map("tbluser_checklist_item")
+}
+
+model tbluser_checklist_session {
+  sessionid                 Int                         @id @default(autoincrement())
+  employeeid                Int
+  clid                      Int
+  logid                     Int?
+  startedat                 DateTime?                   @default(now()) @db.Timestamp(6)
+  completedat               DateTime?                   @db.Timestamp(6)
+  isactive                  Boolean?                    @default(true)
+  scanned_receipt_id        Int? // Reference to scanned receipt for this session
+  tbluser_checklist_item    tbluser_checklist_item[]
+  tblchecklisttemplate      tblchecklisttemplate        @relation(fields: [clid], references: [clid], onDelete: NoAction, onUpdate: NoAction)
+  tblemployee               tblemployee                 @relation(fields: [employeeid], references: [employeeid], onDelete: NoAction, onUpdate: NoAction)
+  tblscanned_receipt        tblscanned_receipt?         @relation(fields: [scanned_receipt_id], references: [id], onDelete: SetNull)
+  tblcar_checklist_session  tblcar_checklist_session[]
+  tblcust_checklist_session tblcust_checklist_session[]
+  tblchecklist_order        tblchecklist_order[]
+  tblrental_order           tblrental_order[]
+  tblrental_order_owner_checklist tblrental_order_owner_checklist[]
+  tblpickup_order_session   tblpickup_order_session?
+
+  @@index([scanned_receipt_id])
+  @@map("tbluser_checklist_session")
+}
+
+model tblworklog {
+  LogID            Int              @id(map: "WorkLog_pkey") @default(autoincrement())
+  EmployeeID       Int
+  WorkDate         DateTime?        @default(dbgenerated("CURRENT_DATE")) @db.Date
+  LoginTime        DateTime?        @db.Timestamp(6)
+  LogoutTime       DateTime?        @db.Timestamp(6)
+  TotalWorkedHours Decimal?         @default(dbgenerated("\nCASE\n    WHEN ((\"LogoutTime\" IS NOT NULL) AND (\"LoginTime\" IS NOT NULL)) THEN (EXTRACT(epoch FROM (\"LogoutTime\" - \"LoginTime\")) / 3600.0)\n    ELSE NULL::numeric\nEND")) @db.Decimal
+  WorkTemplateID   Int?
+  Notes            String?          @db.VarChar(555)
+  ExtraTime        Decimal?         @db.Decimal(17, 6)
+  OvertimeHours    Decimal?         @db.Decimal(17, 6)
+  PaidHours        Decimal?         @db.Decimal(17, 6)
+  tblworktemplate  tblworktemplate? @relation(fields: [WorkTemplateID], references: [TemplateID], onDelete: NoAction, onUpdate: NoAction, map: "fk_worklog_template")
+  tblemployee      tblemployee      @relation(fields: [EmployeeID], references: [employeeid], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("tblworklog")
+}
+
+model tblcustomers {
+  customerid      Int     @id @default(autoincrement())
+  name            String
+  customeraddress String
+  postnr          String?
+  place           String?
+  country         String? @db.VarChar(100)
+  telefon         String?
+  email           String? @db.VarChar(255)
+  accid           BigInt
+
+  // Relations
+  tblcustomerkey             tblcustomerkey[] // A customer can have many key connections
+  tblaccount                 tblaccount                   @relation(fields: [accid], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tblcust_checklist_session  tblcust_checklist_session[]
+  tblchecklist_order         tblchecklist_order[]
+  tblrental_order            tblrental_order[]
+  tblrental_order_event      tblrental_order_event[]
+  tblrental_order_contract_acceptance tblrental_order_contract_acceptance[]
+  tblpickup_order            tblpickup_order[]
+  tblworkorder_gallery_image tblworkorder_gallery_image[]
+
+  @@map("tblcustomers")
+}
+
+model tblkey {
+  keyid          Int              @id @default(autoincrement())
+  keytype        String
+  keycolor       String?
+  keynumber      Int
+  accid          BigInt
+  // Relations
+  tblcustomerkey tblcustomerkey[] // A key can belong to one or more customers
+  tblaccount     tblaccount       @relation(fields: [accid], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("tblkey")
+}
+
+model tblcustomerkey {
+  id         Int @id @default(autoincrement())
+  customerid Int
+  keyid      Int
+
+  // Relations
+  tblcustomers tblcustomers @relation(fields: [customerid], references: [customerid], onDelete: Cascade)
+  tblkey       tblkey       @relation(fields: [keyid], references: [keyid], onDelete: Cascade)
+
+  @@map("tblcustomerkey")
+}
+
+model tblMessageTemplate {
+  id                 BigInt               @id @default(autoincrement())
+  msg                String
+  name               String?              @db.VarChar(100)
+  account_id         BigInt?
+  created            DateTime             @default(now()) @db.Timestamptz(6)
+  updated            DateTime             @default(now()) @db.Timestamptz(6)
+  tblmessagedelivery tblmessagedelivery[]
+
+  @@map("tblmessagetemplate")
+}
+
+model tblmessagedelivery {
+  id                  BigInt              @id @default(autoincrement())
+  sender_id           BigInt
+  recipient_id        BigInt
+  message_template_id BigInt?
+  message_content     String
+  subject             String?             @db.VarChar(255)
+  sent_at             DateTime            @default(now()) @db.Timestamptz(6)
+  msg_read            DateTime?           @db.Timestamptz(6)
+  status              String              @default("pending") @db.VarChar(20)
+  account_id          BigInt
+  tblmessagetemplate  tblMessageTemplate? @relation(fields: [message_template_id], references: [id], onDelete: SetNull)
+  sender              tbluser             @relation("MessageSender", fields: [sender_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  recipient           tbluser             @relation("MessageRecipient", fields: [recipient_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tblaccount          tblaccount          @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("tblmessagedelivery")
+}
+
+model tblcar {
+  id                       Int                        @id @default(autoincrement())
+  regnr                    String
+  brand                    String
+  model                    String
+  color                    String?
+  kmstat                   Int?
+  car_status               String?                    @default("operative")
+  vognkort_url             String?
+  last_oil_change_km       Int?
+  last_tire_change_km      Int?
+  accid                    BigInt
+  tblaccount               tblaccount                 @relation(fields: [accid], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tblcar_checklist_session tblcar_checklist_session[]
+  tblrental_order          tblrental_order[]
+  tblrental_order_event    tblrental_order_event[]
+
+  @@map("tblcar")
+}
+
+model tblcar_checklist_session {
+  id                        Int                       @id @default(autoincrement())
+  car_id                    Int
+  session_id                Int                       @unique
+  tblcar                    tblcar                    @relation(fields: [car_id], references: [id], onDelete: Cascade)
+  tbluser_checklist_session tbluser_checklist_session @relation(fields: [session_id], references: [sessionid], onDelete: Cascade)
+
+  @@map("tblcar_checklist_session")
+}
+
+// Rental Order: Car rental order built from customer, car, optional checklist, and contract.
+model tblrental_order {
+  id                              Int       @id @default(autoincrement())
+  account_id                      BigInt
+  customer_id                     Int
+  car_id                          Int
+  checklist_session_id            Int?
+  rental_start                    DateTime  @db.Timestamp(6)
+  rental_end                      DateTime  @db.Timestamp(6)
+  pickup_place                    String?   @db.VarChar(255)
+  dropoff_place                   String?   @db.VarChar(255)
+  driven_km                       Int?
+  passenger_count                 Int?
+  has_pets                        Boolean   @default(false)
+  deposit_amount                  Decimal?  @db.Decimal(10, 2)
+  rental_amount                   Decimal?  @db.Decimal(10, 2)
+  currency                        String    @default("NOK") @db.VarChar(3)
+  status                          String    @default("draft") @db.VarChar(50)
+  notes                           String?
+  customer_event_followup_enabled Boolean   @default(false)
+  customer_event_pin_hash         String?   @db.VarChar(64)
+  customer_event_pin              String?   @db.VarChar(4)
+  customer_event_followup_sent_at DateTime? @db.Timestamp(6)
+  created_by                      BigInt?
+  created_at                      DateTime? @default(now()) @db.Timestamp(6)
+  updated_at                      DateTime? @default(now()) @db.Timestamp(6)
+
+  tblaccount                tblaccount                 @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  tblcustomers              tblcustomers               @relation(fields: [customer_id], references: [customerid], onDelete: Cascade)
+  tblcar                    tblcar                     @relation(fields: [car_id], references: [id], onDelete: Cascade)
+  tbluser_checklist_session tbluser_checklist_session? @relation(fields: [checklist_session_id], references: [sessionid], onDelete: SetNull)
+  tblrental_order_event     tblrental_order_event[]
+  tblrental_order_contract  tblrental_order_contract[]
+  tblrental_order_contract_acceptance tblrental_order_contract_acceptance[]
+  tblrental_order_owner_checklist tblrental_order_owner_checklist[]
+
+  @@index([account_id, rental_start])
+  @@index([customer_id])
+  @@index([car_id])
+  @@index([checklist_session_id])
+  @@map("tblrental_order")
+}
+
+model tblrental_order_owner_checklist {
+  id                         Int       @id @default(autoincrement())
+  rental_order_id            Int
+  session_id                 Int       @unique
+  checklist_role             String    @default("owner") @db.VarChar(30)
+  created_by                 BigInt?
+  created_at                 DateTime? @default(now()) @db.Timestamp(6)
+
+  tblrental_order            tblrental_order           @relation(fields: [rental_order_id], references: [id], onDelete: Cascade)
+  tbluser_checklist_session  tbluser_checklist_session @relation(fields: [session_id], references: [sessionid], onDelete: Cascade)
+  tbluser                    tbluser?                  @relation(fields: [created_by], references: [id], onDelete: SetNull)
+
+  @@index([rental_order_id, created_at])
+  @@index([rental_order_id, checklist_role])
+  @@map("tblrental_order_owner_checklist")
+}
+
+// Rental Order Event: Incidents/follow-up events tied to a rental order.
+model tblrental_order_event {
+  id              Int       @id @default(autoincrement())
+  rental_order_id Int
+  account_id      BigInt
+  customer_id     Int?
+  car_id          Int?
+  event_at        DateTime  @db.Timestamp(6)
+  location        String?   @db.VarChar(255)
+  customer_name   String?   @db.VarChar(255)
+  car_label       String?   @db.VarChar(255)
+  event_type      String    @db.VarChar(100)
+  is_resolved     Boolean   @default(false)
+  resolved_at     DateTime? @db.Timestamp(6)
+  incident_cost   Decimal?  @db.Decimal(10, 2)
+  refund_type     String?   @db.VarChar(100)
+  notes           String?
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  updated_at      DateTime? @default(now()) @db.Timestamp(6)
+
+  tblrental_order tblrental_order @relation(fields: [rental_order_id], references: [id], onDelete: Cascade)
+  tblaccount      tblaccount      @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  tblcustomers    tblcustomers?   @relation(fields: [customer_id], references: [customerid], onDelete: SetNull)
+  tblcar          tblcar?         @relation(fields: [car_id], references: [id], onDelete: SetNull)
+
+  @@index([rental_order_id, event_at])
+  @@index([account_id, event_at])
+  @@index([customer_id])
+  @@index([car_id])
+  @@map("tblrental_order_event")
+}
+
+// Rental Order Contract: Metadata for contracts connected to rental orders.
+model tblrental_order_contract {
+  id                Int       @id @default(autoincrement())
+  rental_order_id   Int
+  account_id        BigInt
+  storage_bucket    String    @default("WorkOrderContracts") @db.VarChar(100)
+  storage_path      String    @db.VarChar(1000)
+  original_filename String    @db.VarChar(255)
+  document_type     String    @default("contract") @db.VarChar(20)
+  content_type      String?   @db.VarChar(120)
+  file_size_bytes   Int?
+  file_sha256       String?   @db.VarChar(64)
+  uploaded_by       BigInt?
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  updated_at        DateTime? @default(now()) @db.Timestamp(6)
+
+  tblrental_order                     tblrental_order                       @relation(fields: [rental_order_id], references: [id], onDelete: Cascade)
+  tblaccount                          tblaccount                            @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  tblrental_order_contract_acceptance tblrental_order_contract_acceptance[]
+
+  @@unique([rental_order_id, storage_path])
+  @@index([rental_order_id, created_at])
+  @@index([account_id, created_at])
+  @@map("tblrental_order_contract")
+}
+
+// Rental Order Contract Acceptance: Public token and audit trail for customer verification.
+model tblrental_order_contract_acceptance {
+  id                         Int       @id @default(autoincrement())
+  contract_id                Int
+  rental_order_id            Int
+  account_id                 BigInt
+  customer_id                Int?
+  customer_email             String    @db.VarChar(255)
+  token_hash                 String    @unique @db.VarChar(64)
+  token_expires_at           DateTime  @db.Timestamp(6)
+  sent_at                    DateTime? @db.Timestamp(6)
+  viewed_at                  DateTime? @db.Timestamp(6)
+  viewed_ip                  String?   @db.VarChar(100)
+  viewed_user_agent          String?
+  reminder_sent_at           DateTime? @db.Timestamp(6)
+  reminder_count             Int       @default(0)
+  accepted_at                DateTime? @db.Timestamp(6)
+  accepted_name              String?   @db.VarChar(255)
+  accepted_email             String?   @db.VarChar(255)
+  accepted_ip                String?   @db.VarChar(100)
+  accepted_user_agent        String?
+  canceled_at                DateTime? @db.Timestamp(6)
+  canceled_by                BigInt?
+  acceptance_text            String?
+  contract_storage_path      String    @db.VarChar(1000)
+  contract_original_filename String    @db.VarChar(255)
+  contract_file_sha256       String?   @db.VarChar(64)
+  created_by                 BigInt?
+  created_at                 DateTime? @default(now()) @db.Timestamp(6)
+  updated_at                 DateTime? @default(now()) @db.Timestamp(6)
+
+  tblrental_order                         tblrental_order                         @relation(fields: [rental_order_id], references: [id], onDelete: Cascade)
+  tblaccount                              tblaccount                              @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  tblcustomers                            tblcustomers?                            @relation(fields: [customer_id], references: [customerid], onDelete: SetNull)
+  tblrental_order_contract                 tblrental_order_contract                 @relation(fields: [contract_id], references: [id], onDelete: Cascade)
+
+  @@index([contract_id, created_at])
+  @@index([rental_order_id, accepted_at])
+  @@index([rental_order_id, canceled_at])
+  @@index([account_id, created_at])
+  @@map("tblrental_order_contract_acceptance")
+}
+
+// Subscription Plans (Gold, Silver, Bronze, Free)
+model tblsubscriptionplan {
+  id               Int      @id @default(autoincrement())
+  plan_name        String   @unique @db.VarChar(50) // 'gold', 'silver', 'bronze', 'free'
+  display_name     String   @db.VarChar(100)
+  access_level_min Int // Minimum access level for this plan
+  access_level_max Int // Maximum access level for this plan
+  price_monthly    Decimal? @db.Decimal(10, 2)
+  price_yearly     Decimal? @db.Decimal(10, 2)
+  max_users        Int? // Maximum users allowed (null = unlimited)
+  template_limit   Int? // Maximum templates allowed (work + checklist combined, null = unlimited)
+  customer_limit   Int? // Maximum customers allowed (null = unlimited)
+  description      String?
+  is_active        Boolean  @default(true)
+  is_public        Boolean  @default(true) // False for private/custom plans not shown on public subscription page
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  tblsubscriptionplanaccess tblsubscriptionplanaccess[]
+  tblaccount                tblaccount[]
+  tblregistrationpayment    tblregistrationpayment[]
+
+  @@map("tblsubscriptionplan")
+}
+
+// Database tables available in the system
+model tbldatabasetable {
+  id           Int      @id @default(autoincrement())
+  table_name   String   @unique @db.VarChar(100) // Actual database table name
+  display_name String   @db.VarChar(100) // User-friendly name
+  description  String?
+  category     String?  @db.VarChar(50) // e.g., 'reports', 'management', 'admin'
+  sort_order   Int      @default(0)
+  is_system    Boolean  @default(false) // System tables that cannot be restricted
+  is_active    Boolean  @default(true)
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
+
+  // Relations
+  tblsubscriptionplanaccess tblsubscriptionplanaccess[]
+
+  @@map("tbldatabasetable")
+}
+
+// Junction table: Which tables are included in each subscription plan
+model tblsubscriptionplanaccess {
+  id                   Int      @id @default(autoincrement())
+  subscription_plan_id Int
+  database_table_id    Int
+  access_type          String   @default("full") @db.VarChar(20) // 'full', 'read_only', 'limited'
+  created_at           DateTime @default(now()) @db.Timestamptz(6)
+
+  // Relations
+  tblsubscriptionplan tblsubscriptionplan @relation(fields: [subscription_plan_id], references: [id], onDelete: Cascade)
+  tbldatabasetable    tbldatabasetable    @relation(fields: [database_table_id], references: [id], onDelete: Cascade)
+
+  @@unique([subscription_plan_id, database_table_id])
+  @@map("tblsubscriptionplanaccess")
+}
+
+// Customer Checklist Session: Links a customer to a checklist session
+model tblcust_checklist_session {
+  id                        Int                       @id @default(autoincrement())
+  customer_id               Int
+  session_id                Int                       @unique
+  tblcustomers              tblcustomers              @relation(fields: [customer_id], references: [customerid], onDelete: Cascade)
+  tbluser_checklist_session tbluser_checklist_session @relation(fields: [session_id], references: [sessionid], onDelete: Cascade)
+
+  @@map("tblcust_checklist_session")
+}
+
+// Checklist Order: Exportable order from completed checklist session
+model tblchecklist_order {
+  id                        Int                       @id @default(autoincrement())
+  session_id                Int                       @unique
+  customer_id               Int
+  order_name                String                    @db.VarChar(255)
+  order_description         String?
+  total_items               Int                       @default(0)
+  completed_items           Int                       @default(0)
+  status                    String                    @default("pending") @db.VarChar(50) // pending, exported, invoiced
+  created_at                DateTime?                 @default(now()) @db.Timestamp(6)
+  exported_at               DateTime?                 @db.Timestamp(6)
+  exported_by               Int?
+  notes                     String?
+  tbluser_checklist_session tbluser_checklist_session @relation(fields: [session_id], references: [sessionid], onDelete: Cascade)
+  tblcustomers              tblcustomers              @relation(fields: [customer_id], references: [customerid], onDelete: Cascade)
+  tblemployee               tblemployee?              @relation(fields: [exported_by], references: [employeeid], onDelete: SetNull)
+  tblchecklist_order_item   tblchecklist_order_item[]
+
+  @@map("tblchecklist_order")
+}
+
+// Checklist Order Item: Individual line items for the order
+model tblchecklist_order_item {
+  id                     Int                    @id @default(autoincrement())
+  order_id               Int
+  user_item_id           Int
+  task_name              String                 @db.VarChar(500)
+  task_description       String?
+  quantity               Int                    @default(1)
+  unit_price             Decimal?               @db.Decimal(10, 2)
+  notes                  String?
+  is_billable            Boolean?               @default(true)
+  created_at             DateTime?              @default(now()) @db.Timestamp(6)
+  tblchecklist_order     tblchecklist_order     @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  tbluser_checklist_item tbluser_checklist_item @relation(fields: [user_item_id], references: [useritemid], onDelete: Cascade)
+
+  @@map("tblchecklist_order_item")
+}
+
+// Pickup Order: Work order for container pickup/delivery (Arbeidsordre)
+model tblpickup_order {
+  id               Int     @id @default(autoincrement())
+  account_id       BigInt
+  customer_id      Int
+  customer_number  String? @db.VarChar(50) // Kunde nr
+  reference_number String? @db.VarChar(100) // Referansenr
+
+  // Order types with dates
+  order_type String    @db.VarChar(20) // utsetting, tømming, avslutt
+  order_date DateTime? @db.Date
+
+  // Key info
+  key_number String? @db.VarChar(50)
+  key_color  String? @db.VarChar(50)
+
+  // Driver notes
+  driver_notes String? // Beskjed til sjåfør
+
+  // Completion info
+  weight_kg    Decimal? @db.Decimal(10, 2)
+  performed_by Int? // Employee who performed the work
+
+  // Invoice address (if different from customer)
+  invoice_name       String? @db.VarChar(255)
+  invoice_address    String? @db.VarChar(500)
+  invoice_postnr     String? @db.VarChar(20)
+  invoice_place      String? @db.VarChar(100)
+  invoice_phone      String? @db.VarChar(50)
+  invoice_org_number String? @db.VarChar(50)
+  invoice_email      String? @db.VarChar(255)
+
+  // Rental info
+  is_long_term_rental Boolean?  @default(false)
+  currency            String    @default("NOK") @db.VarChar(3)
+  invoiced_date       DateTime? @db.Date
+
+  // Status and timestamps
+  status               String    @default("pending") @db.VarChar(50) // pending, assigned, in_progress, completed, invoiced
+  assigned_employee_id Int? // Employee assigned to handle this order
+  created_at           DateTime? @default(now()) @db.Timestamp(6)
+  updated_at           DateTime? @default(now()) @db.Timestamp(6)
+  completed_at         DateTime? @db.Timestamp(6)
+
+  // Relations
+  tblaccount                 tblaccount                   @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tblcustomers               tblcustomers                 @relation(fields: [customer_id], references: [customerid], onDelete: Cascade)
+  performed_employee         tblemployee?                 @relation("PerformedBy", fields: [performed_by], references: [employeeid], onDelete: SetNull)
+  assigned_employee          tblemployee?                 @relation("AssignedTo", fields: [assigned_employee_id], references: [employeeid], onDelete: SetNull)
+  tblpickup_order_item       tblpickup_order_item[]
+  tblpickup_order_session    tblpickup_order_session[]
+  tblworkorder_worklog       tblworkorder_worklog[]
+  tblworkorder_contract      tblworkorder_contract[]
+  tblworkorder_gallery_image tblworkorder_gallery_image[]
+  tblworkorder_gallery_share tblworkorder_gallery_share[]
+  tblscanned_receipt         tblscanned_receipt[]
+
+  @@map("tblpickup_order")
+}
+
+// Work Order Contract: Metadata for PDF/DOC contracts stored in Supabase Storage.
+model tblworkorder_contract {
+  id                Int       @id @default(autoincrement())
+  pickup_order_id   Int
+  account_id        BigInt
+  storage_bucket    String    @default("WorkOrderContracts") @db.VarChar(100)
+  storage_path      String    @db.VarChar(1000)
+  original_filename String    @db.VarChar(255)
+  document_type     String    @default("contract") @db.VarChar(20)
+  content_type      String?   @db.VarChar(120)
+  file_size_bytes   Int?
+  file_sha256       String?   @db.VarChar(64)
+  uploaded_by       BigInt?
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  updated_at        DateTime? @default(now()) @db.Timestamp(6)
+
+  tblpickup_order                  tblpickup_order                    @relation(fields: [pickup_order_id], references: [id], onDelete: Cascade)
+  tblaccount                       tblaccount                         @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  tblworkorder_contract_acceptance tblworkorder_contract_acceptance[]
+
+  @@unique([pickup_order_id, storage_path])
+  @@index([pickup_order_id, created_at])
+  @@index([account_id, created_at])
+  @@map("tblworkorder_contract")
+}
+
+// Work Order Contract Acceptance: Public token and audit trail for customer acceptance.
+model tblworkorder_contract_acceptance {
+  id                         Int       @id @default(autoincrement())
+  contract_id                Int
+  pickup_order_id            Int
+  account_id                 BigInt
+  customer_id                Int?
+  customer_email             String    @db.VarChar(255)
+  token_hash                 String    @unique @db.VarChar(64)
+  token_expires_at           DateTime  @db.Timestamp(6)
+  sent_at                    DateTime? @db.Timestamp(6)
+  viewed_at                  DateTime? @db.Timestamp(6)
+  viewed_ip                  String?   @db.VarChar(100)
+  viewed_user_agent          String?
+  reminder_sent_at           DateTime? @db.Timestamp(6)
+  reminder_count             Int       @default(0)
+  accepted_at                DateTime? @db.Timestamp(6)
+  accepted_name              String?   @db.VarChar(255)
+  accepted_email             String?   @db.VarChar(255)
+  accepted_ip                String?   @db.VarChar(100)
+  accepted_user_agent        String?
+  canceled_at                DateTime? @db.Timestamp(6)
+  canceled_by                BigInt?
+  acceptance_text            String?
+  contract_storage_path      String    @db.VarChar(1000)
+  contract_original_filename String    @db.VarChar(255)
+  contract_file_sha256       String?   @db.VarChar(64)
+  created_by                 BigInt?
+  created_at                 DateTime? @default(now()) @db.Timestamp(6)
+  updated_at                 DateTime? @default(now()) @db.Timestamp(6)
+
+  tblworkorder_contract tblworkorder_contract @relation(fields: [contract_id], references: [id], onDelete: Cascade)
+
+  @@index([contract_id, created_at])
+  @@index([pickup_order_id, accepted_at])
+  @@index([pickup_order_id, canceled_at])
+  @@index([account_id, created_at])
+  @@map("tblworkorder_contract_acceptance")
+}
+
+// Work Order Gallery Image: Metadata for customer/workorder photos stored in Supabase Storage.
+model tblworkorder_gallery_image {
+  id                Int       @id @default(autoincrement())
+  pickup_order_id   Int
+  account_id        BigInt
+  customer_id       Int?
+  storage_bucket    String    @default("Gallery") @db.VarChar(100)
+  storage_path      String    @db.VarChar(1000)
+  original_filename String    @db.VarChar(255)
+  caption           String?   @db.VarChar(500)
+  is_public         Boolean   @default(true)
+  content_type      String?   @db.VarChar(120)
+  file_size_bytes   Int?
+  file_sha256       String?   @db.VarChar(64)
+  uploaded_by       BigInt?
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  updated_at        DateTime? @default(now()) @db.Timestamp(6)
+
+  tblpickup_order tblpickup_order @relation(fields: [pickup_order_id], references: [id], onDelete: Cascade)
+  tblaccount      tblaccount      @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  tblcustomers    tblcustomers?   @relation(fields: [customer_id], references: [customerid], onDelete: SetNull)
+
+  @@unique([storage_bucket, storage_path])
+  @@index([pickup_order_id, created_at])
+  @@index([account_id, created_at])
+  @@index([customer_id, created_at])
+  @@map("tblworkorder_gallery_image")
+}
+
+// Work Order Gallery Share: Public, revocable links for sharing a workorder photo set.
+model tblworkorder_gallery_share {
+  id              Int       @id @default(autoincrement())
+  pickup_order_id Int
+  account_id      BigInt
+  token_hash      String    @unique @db.VarChar(64)
+  title           String?   @db.VarChar(255)
+  expires_at      DateTime? @db.Timestamp(6)
+  created_by      BigInt?
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  revoked_at      DateTime? @db.Timestamp(6)
+
+  tblpickup_order tblpickup_order @relation(fields: [pickup_order_id], references: [id], onDelete: Cascade)
+  tblaccount      tblaccount      @relation(fields: [account_id], references: [id], onDelete: Cascade)
+
+  @@index([pickup_order_id, created_at])
+  @@index([account_id, created_at])
+  @@map("tblworkorder_gallery_share")
+}
+
+// Work Order Worklog: Tracks time employees spend working on customer orders.
+// Separate from tblworklog, which is used for wage/payroll clock-in.
+model tblworkorder_worklog {
+  id              Int       @id @default(autoincrement())
+  pickup_order_id Int
+  employee_id     Int
+  account_id      BigInt
+  work_start      DateTime  @default(now()) @db.Timestamp(6)
+  work_end        DateTime? @db.Timestamp(6)
+  notes           String?
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  updated_at      DateTime? @default(now()) @db.Timestamp(6)
+
+  tblpickup_order tblpickup_order @relation(fields: [pickup_order_id], references: [id], onDelete: Cascade)
+  tblemployee     tblemployee     @relation(fields: [employee_id], references: [employeeid], onDelete: NoAction, onUpdate: NoAction)
+  tblaccount      tblaccount      @relation(fields: [account_id], references: [id], onDelete: Cascade)
+
+  @@index([pickup_order_id, work_end])
+  @@index([employee_id, work_end])
+  @@index([account_id, work_start])
+  @@map("tblworkorder_worklog")
+}
+
+// Pickup Order Session: Links a pickup order to the checklist session it came from
+model tblpickup_order_session {
+  id              Int @id @default(autoincrement())
+  pickup_order_id Int
+  session_id      Int @unique
+
+  tblpickup_order           tblpickup_order           @relation(fields: [pickup_order_id], references: [id], onDelete: Cascade, map: "fk_pickup_order")
+  tbluser_checklist_session tbluser_checklist_session @relation(fields: [session_id], references: [sessionid], onDelete: Cascade, map: "fk_session")
+
+  @@map("tblpickup_order_session")
+}
+
+// Pickup Order Item: Container/waste type items for pickup orders
+model tblpickup_order_item {
+  id             Int       @id @default(autoincrement())
+  order_id       Int
+  waste_type     String    @db.VarChar(100) // Restavfall, Papp, Plast, Papir, Glass/metall, Organisk, Hageavfall
+  container_size String    @db.VarChar(20) // 140L, 240L, 360L, 660L, 1100L
+  quantity       Int       @default(1)
+  notes          String?
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+
+  tblpickup_order tblpickup_order @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  @@map("tblpickup_order_item")
+}
+
+// Workorder Goods Type: Account-specific goods types (replaces hardcoded WASTE_TYPES)
+model tblworkorder_goods_type {
+  id         Int       @id @default(autoincrement())
+  account_id BigInt
+  type_value String    @db.VarChar(100) // Internal value
+  type_label String    @db.VarChar(100) // Display label
+  sort_order Int       @default(0)
+  is_active  Boolean   @default(true)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @db.Timestamp(6)
+
+  tblaccount tblaccount @relation(fields: [account_id], references: [id], onDelete: Cascade)
+
+  @@unique([account_id, type_value])
+  @@index([account_id])
+  @@map("tblworkorder_goods_type")
+}
+
+// Workorder Goods Size: Account-specific goods sizes (replaces hardcoded CONTAINER_SIZES)
+model tblworkorder_goods_size {
+  id         Int       @id @default(autoincrement())
+  account_id BigInt
+  size_value String    @db.VarChar(50) // Internal value
+  size_label String    @db.VarChar(100) // Display label
+  sort_order Int       @default(0)
+  is_active  Boolean   @default(true)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @db.Timestamp(6)
+
+  tblaccount tblaccount @relation(fields: [account_id], references: [id], onDelete: Cascade)
+
+  @@unique([account_id, size_value])
+  @@index([account_id])
+  @@map("tblworkorder_goods_size")
+}
+
+// Workorder Order Type: Account-specific order types (replaces hardcoded ORDER_TYPES)
+model tblworkorder_order_type {
+  id               Int       @id @default(autoincrement())
+  account_id       BigInt
+  order_type_value String    @db.VarChar(50) // Internal value
+  order_type_label String    @db.VarChar(100) // Display label
+  sort_order       Int       @default(0)
+  is_active        Boolean   @default(true)
+  created_at       DateTime? @default(now()) @db.Timestamp(6)
+  updated_at       DateTime? @default(now()) @db.Timestamp(6)
+
+  tblaccount tblaccount @relation(fields: [account_id], references: [id], onDelete: Cascade)
+
+  @@unique([account_id, order_type_value])
+  @@index([account_id])
+  @@map("tblworkorder_order_type")
+}
+
+// Receipt Template: Stores field location definitions for OCR extraction
+model tblreceipt_template {
+  id               Int       @id @default(autoincrement())
+  account_id       BigInt
+  template_name    String    @db.VarChar(255)
+  description      String?
+  sample_image_url String?
+  image_width      Int?
+  image_height     Int?
+  is_active        Boolean   @default(true)
+  created_at       DateTime? @default(now()) @db.Timestamp(6)
+  updated_at       DateTime? @default(now()) @db.Timestamp(6)
+  created_by       Int?
+
+  tblaccount                tblaccount                  @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  tblemployee               tblemployee?                @relation(fields: [created_by], references: [employeeid], onDelete: SetNull)
+  tblreceipt_template_field tblreceipt_template_field[]
+  tblscanned_receipt        tblscanned_receipt[]
+  tblchecklisttemplate      tblchecklisttemplate[] // Checklists using this receipt template
+
+  @@index([account_id])
+  @@map("tblreceipt_template")
+}
+
+// Receipt Template Field: Defines bounding box locations for each data field
+model tblreceipt_template_field {
+  id                  Int       @id @default(autoincrement())
+  template_id         Int
+  field_name          String    @db.VarChar(100) // e.g., 'weight', 'customer_number'
+  field_label         String    @db.VarChar(100) // Display label
+  field_type          String    @db.VarChar(50) // 'text', 'number', 'date'
+  bbox_x              Decimal   @db.Decimal(10, 6) // Position as % (0-100)
+  bbox_y              Decimal   @db.Decimal(10, 6)
+  bbox_width          Decimal   @db.Decimal(10, 6)
+  bbox_height         Decimal   @db.Decimal(10, 6)
+  order_field_mapping String?   @db.VarChar(100) // Maps to pickup order field
+  is_required         Boolean   @default(false)
+  post_processor      String?   @db.VarChar(50) // 'trim', 'parse_weight', 'parse_date'
+  sort_order          Int       @default(0)
+  created_at          DateTime? @default(now()) @db.Timestamp(6)
+
+  tblreceipt_template tblreceipt_template @relation(fields: [template_id], references: [id], onDelete: Cascade)
+
+  @@index([template_id])
+  @@map("tblreceipt_template_field")
+}
+
+// Scanned Receipt: Stores processed receipts and their extracted data
+model tblscanned_receipt {
+  id                   Int       @id @default(autoincrement())
+  account_id           BigInt
+  template_id          Int?
+  original_image_url   String
+  extracted_data       Json? // { fieldName: { value, confidence, rawText } }
+  corrected_data       Json? // User corrections
+  status               String    @default("pending") @db.VarChar(50) // pending, processing, completed, failed, submitted
+  processing_error     String?
+  ocr_confidence       Decimal?  @db.Decimal(5, 2)
+  pickup_order_id      Int?
+  checklist_session_id Int? // Reference to checklist session if scanned via checklist
+  scanned_by           Int?
+  scanned_at           DateTime? @default(now()) @db.Timestamp(6)
+  processed_at         DateTime? @db.Timestamp(6)
+  submitted_at         DateTime? @db.Timestamp(6)
+
+  tblaccount                tblaccount                  @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  tblreceipt_template       tblreceipt_template?        @relation(fields: [template_id], references: [id], onDelete: SetNull)
+  tblpickup_order           tblpickup_order?            @relation(fields: [pickup_order_id], references: [id], onDelete: SetNull)
+  tblemployee               tblemployee?                @relation(fields: [scanned_by], references: [employeeid], onDelete: SetNull)
+  tbluser_checklist_session tbluser_checklist_session[] // Sessions using this scanned receipt
+
+  @@index([account_id])
+  @@index([status])
+  @@index([checklist_session_id])
+  @@map("tblscanned_receipt")
+}
+
+model tblKeepAlive {
+  id       BigInt   @id @default(autoincrement())
+  alive_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("tbl_keep_alive")
+}
+
+model tblbackup_log {
+  id        Int      @id @default(autoincrement())
+  tableName String   @db.VarChar(100)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("tblbackup_log")
+}
+
+model tblGlobalSystemConfig {
+  id          BigInt   @id(map: "tblGlobalSystemConfig_pkey") @default(autoincrement())
+  key         String   @db.VarChar(100)
+  value       String?
+  description String?  @db.VarChar(500)
+  environment String   @default("all") @db.VarChar(20)
+  is_secret   Boolean  @default(false)
+  category    String?  @db.VarChar(50)
+  created     DateTime @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@unique([key, environment], map: "tblGlobalSystemConfig_key_environment_key")
+  @@index([category], map: "tblGlobalSystemConfig_category_idx")
+  @@index([environment], map: "tblGlobalSystemConfig_environment_idx")
+  @@map("tbl_global_system_config")
+}

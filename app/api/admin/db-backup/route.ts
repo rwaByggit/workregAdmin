@@ -8,6 +8,8 @@ import { requireSystemAdmin as requireAdmin } from '@/app/lib/system-admin';
 
 export const runtime = 'nodejs';
 
+type SqlLike = postgres.Sql | postgres.TransactionSql;
+
 const DEFAULT_PREVIEW_LIMIT = 100;
 const MAX_PREVIEW_LIMIT = 1000;
 const TRANSFER_CHUNK_SIZE = 200;
@@ -219,7 +221,7 @@ function hasKnownAccountScope(table: string, columns: ColumnInfo[]) {
   );
 }
 
-async function listTables(sql: ReturnType<typeof postgres>) {
+async function listTables(sql: SqlLike) {
   return sql<TableNameResult[]>`
     SELECT table_name
     FROM information_schema.tables
@@ -229,7 +231,7 @@ async function listTables(sql: ReturnType<typeof postgres>) {
   `;
 }
 
-async function tableExists(sql: ReturnType<typeof postgres>, table: string) {
+async function tableExists(sql: SqlLike, table: string) {
   const rows = await sql<TableNameResult[]>`
     SELECT table_name
     FROM information_schema.tables
@@ -241,7 +243,7 @@ async function tableExists(sql: ReturnType<typeof postgres>, table: string) {
   return rows.length > 0;
 }
 
-async function getColumns(sql: ReturnType<typeof postgres>, table: string) {
+async function getColumns(sql: SqlLike, table: string) {
   return sql<ColumnInfo[]>`
     SELECT column_name, data_type, is_generated
     FROM information_schema.columns
@@ -269,7 +271,7 @@ function getMissingBackupColumnNames(sourceColumns: ColumnInfo[], backupColumns:
     .filter((column) => !backupColumnNames.has(column));
 }
 
-async function getPrimaryKeys(sql: ReturnType<typeof postgres>, table: string) {
+async function getPrimaryKeys(sql: SqlLike, table: string) {
   const rows = await sql<{ column_name: string }[]>`
     SELECT kcu.column_name
     FROM information_schema.table_constraints tc
@@ -286,7 +288,7 @@ async function getPrimaryKeys(sql: ReturnType<typeof postgres>, table: string) {
   return rows.map((row) => row.column_name);
 }
 
-async function getForeignKeys(sql: ReturnType<typeof postgres>, table: string) {
+async function getForeignKeys(sql: SqlLike, table: string) {
   const rows = await sql<ForeignKeyColumnInfo[]>`
     SELECT
       con.conname AS constraint_name,
@@ -336,7 +338,7 @@ async function getForeignKeys(sql: ReturnType<typeof postgres>, table: string) {
   return Array.from(foreignKeys.values());
 }
 
-async function countRows(sql: ReturnType<typeof postgres>, table: string, accountScope?: AccountScope | null) {
+async function countRows(sql: SqlLike, table: string, accountScope?: AccountScope | null) {
   const rows = await sql.unsafe<CountResult[]>(
     `SELECT COUNT(*)::bigint AS count FROM ${quoteIdentifier(table)} t ${accountScope?.whereClause ?? ''}`,
     (accountScope?.values ?? []) as never[]
@@ -344,7 +346,7 @@ async function countRows(sql: ReturnType<typeof postgres>, table: string, accoun
   return rows[0]?.count ?? BigInt(0);
 }
 
-async function estimateRows(sql: ReturnType<typeof postgres>, table: string) {
+async function estimateRows(sql: SqlLike, table: string) {
   const rows = await sql<EstimatedCountResult[]>`
     SELECT GREATEST(c.reltuples, 0)::bigint AS estimate
     FROM pg_class c
@@ -358,7 +360,7 @@ async function estimateRows(sql: ReturnType<typeof postgres>, table: string) {
 }
 
 async function fetchRows(
-  sql: ReturnType<typeof postgres>,
+  sql: SqlLike,
   table: string,
   limit: number,
   offset = 0,
@@ -415,7 +417,7 @@ function buildSelectByKeysStatement(table: string, columns: string[], keys: unkn
 }
 
 async function fetchRowsByKeys(
-  sql: ReturnType<typeof postgres>,
+  sql: SqlLike,
   table: string,
   columns: string[],
   keys: unknown[][]
@@ -426,7 +428,7 @@ async function fetchRowsByKeys(
   return sql.unsafe<Record<string, unknown>[]>(select.query, select.values as never[]);
 }
 
-async function ensureBackupLogTable(sql: ReturnType<typeof postgres>) {
+async function ensureBackupLogTable(sql: SqlLike) {
   await sql.unsafe(`
     CREATE TABLE IF NOT EXISTS "tblbackup_log" (
       "id" SERIAL NOT NULL,
@@ -437,7 +439,7 @@ async function ensureBackupLogTable(sql: ReturnType<typeof postgres>) {
   `);
 }
 
-async function createBackupLog(sql: ReturnType<typeof postgres>, table: string) {
+async function createBackupLog(sql: SqlLike, table: string) {
   await sql.unsafe(`
     SELECT setval(
       pg_get_serial_sequence('"tblbackup_log"', 'id'),
@@ -598,8 +600,8 @@ function buildInsertStatement(
 }
 
 async function syncForeignKeyParents(
-  source: ReturnType<typeof postgres>,
-  backup: ReturnType<typeof postgres>,
+  source: SqlLike,
+  backup: SqlLike,
   table: string,
   rows: Record<string, unknown>[],
   activeTables = new Set<string>(),
