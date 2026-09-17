@@ -118,9 +118,6 @@ import { Resend } from 'resend';
 import { NextRequest, NextResponse } from 'next/server';
 import { emailFrom } from '@/lib/email-sender';
 
-
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 // Generate a 6-digit OTP
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -144,7 +141,13 @@ export async function POST(req: NextRequest) {
       }
     });
 
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      throw new Error('RESEND_API_KEY is not configured');
+    }
+
     // Send OTP email
+    const resend = new Resend(apiKey);
     await resend.emails.send({
       from:    emailFrom,
       to:      email,

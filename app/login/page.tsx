@@ -21,9 +21,8 @@ export default function LoginPage() {
   const [redirectUrl, setRedirectUrl] = useState<string>('');
   const [showForgotPassword, setShowForgotPassword] = useState<boolean>(false);
 
-  // 🔒 SECURITY FIX: Force logout if user has existing session
+  // Always show the login form when this route is opened directly.
   useEffect(() => {
-    // Capture redirect parameter from URL
     const searchParams = new URLSearchParams(window.location.search);
     const redirect = searchParams.get('redirect');
     if (redirect) {
@@ -31,14 +30,13 @@ export default function LoginPage() {
     }
 
     if (status === 'authenticated') {
-      // Use redirect URL if available, otherwise go to dashboard
-      router.push(redirect || '/dashboard');
+      signOut({ redirect: false });
       return;
     }
     
     console.log('useeffect loading');
     loadVersion();
-  }, [status, router]);
+  }, [status]);
 
 
   const loadVersion = async () => {

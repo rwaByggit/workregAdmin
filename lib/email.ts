@@ -102,7 +102,15 @@ export function resolveCustomerEmailLanguage(
 const apiKey = process.env.RESEND_API_KEY;
 console.log('email.ts Resend API key:', apiKey ? 'configured' : 'missing');
 
-const resend = new Resend(apiKey);
+function getResendClient() {
+  const resendApiKey = process.env.RESEND_API_KEY;
+
+  if (!resendApiKey) {
+    throw new Error('RESEND_API_KEY is not configured');
+  }
+
+  return new Resend(resendApiKey);
+}
 
 function escapeHtml(value: string) {
   return value
@@ -143,7 +151,7 @@ export const sendContractAcceptanceEmail = async (
     : 'If the button does not work, copy this link into your browser:';
 
   try {
-    const { error } = await resend.emails.send({
+    const { error } = await getResendClient().emails.send({
       from: getEmailFrom(accountName),
       to: data.email,
       subject,
@@ -209,7 +217,7 @@ export const sendContractAcceptanceReminderEmail = async (
     : 'If the button does not work, copy this link into your browser:';
 
   try {
-    const { error } = await resend.emails.send({
+    const { error } = await getResendClient().emails.send({
       from: getEmailFrom(accountName),
       to: data.email,
       subject,
@@ -269,7 +277,7 @@ export const sendRentalEventFollowupEmail = async (
     : 'If the button does not work, copy this link into your browser:';
 
   try {
-    const { error } = await resend.emails.send({
+    const { error } = await getResendClient().emails.send({
       from: getEmailFrom(accountName),
       to: data.email,
       subject,
@@ -334,7 +342,7 @@ export const sendBillEmail = async (data: BillEmailData): Promise<EmailResponse>
     : `This secure link was sent to ${escapeHtml(data.email)} by ${escapeHtml(accountName)}.`;
   const regardsText = isNorwegian ? 'Med vennlig hilsen' : 'Regards';
   try {
-    const { error } = await resend.emails.send({
+    const { error } = await getResendClient().emails.send({
       from: getEmailFrom(accountName),
       to: data.email,
       subject,
@@ -390,7 +398,7 @@ export const sendInvitationEmail = async (
     console.log('📧 Attempting to send email to:', email);
     console.log('Resend API key:', process.env.RESEND_API_KEY ? 'configured' : 'missing');
     
-    const { data: emailData, error } = await resend.emails.send({
+    const { data: emailData, error } = await getResendClient().emails.send({
       from: emailFrom,
       to: email,
       subject: `You've been invited to join ${accountName} on WorkReg`,
@@ -433,7 +441,7 @@ export const sendPasswordResetEmail = async (
   try {
     console.log('📧 Attempting to send password reset email to:', email);
 
-    const { data: emailData, error } = await resend.emails.send({
+    const { data: emailData, error } = await getResendClient().emails.send({
       from: emailFrom,
       to: email,
       subject: 'Reset Your WorkReg Password',
@@ -486,7 +494,7 @@ export const sendSubscriptionNotificationEmail = async (
   try {
     console.log('📧 Attempting to send subscription notification to admin:', adminEmail);
 
-    const { data: emailData, error } = await resend.emails.send({
+    const { data: emailData, error } = await getResendClient().emails.send({
       from: emailFrom,
       to: adminEmail,
       subject: `New Subscription Request: ${planName}`,
@@ -602,7 +610,7 @@ export const sendNewAccountNotificationEmail = async (
   try {
     console.log('📧 Attempting to send new account notification to admin:', adminEmail);
 
-    const { data: emailData, error } = await resend.emails.send({
+    const { data: emailData, error } = await getResendClient().emails.send({
       from: emailFrom,
       to: adminEmail,
       subject: `New Account Created: ${accountName}`,
