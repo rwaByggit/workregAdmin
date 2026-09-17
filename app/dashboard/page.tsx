@@ -62,6 +62,13 @@ interface RowDiffResult {
   rowStatus: Map<string, 'unchanged' | 'changed' | 'onlyBackup' | 'onlySource'>;
 }
 
+interface ColumnComparison {
+  name: string;
+  sourceType: string | null;
+  backupType: string | null;
+  status: 'match' | 'typeMismatch' | 'onlySource' | 'onlyBackup';
+}
+
 async function readJson(response: Response) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -85,6 +92,27 @@ function buildRowKey(row: Row, primaryKeys: string[]) {
 
 function rowsAreEqual(left: Row, right: Row) {
   return stableStringify(left) === stableStringify(right);
+}
+
+function compareColumns(sourceColumns: ColumnInfo[], backupColumns: ColumnInfo[]): ColumnComparison[] {
+  const sourceByName = new Map(sourceColumns.map((column) => [column.name, column.type]));
+  const backupByName = new Map(backupColumns.map((column) => [column.name, column.type]));
+  const names = Array.from(new Set([...sourceByName.keys(), ...backupByName.keys()]))
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }) || left.localeCompare(right));
+
+  return names.map((name) => {
+    const sourceType = sourceByName.get(name) ?? null;
+    const backupType = backupByName.get(name) ?? null;
+    const status = sourceType === null
+      ? 'onlyBackup'
+      : backupType === null
+        ? 'onlySource'
+        : sourceType === backupType
+          ? 'match'
+          : 'typeMismatch';
+
+    return { name, sourceType, backupType, status };
+  });
 }
 
 function diffTableRows(
@@ -217,6 +245,11 @@ export default function DashboardPage() {
     : selectedInfo?.existsInSource !== false;
   const activeColumns = previewTab === 'source' ? detail?.columns ?? [] : detail?.backupColumns ?? [];
   const activeRows = previewTab === 'source' ? detail?.data ?? [] : detail?.backupData ?? [];
+  const columnComparison = useMemo(
+    () => detail ? compareColumns(detail.columns, detail.backupColumns) : [],
+    [detail]
+  );
+  const columnDifferenceCount = columnComparison.filter((column) => column.status !== 'match').length;
   const rowDiff = useMemo(() => {
     if (!detail) return null;
     return diffTableRows(detail.backupData, detail.data, detail.primaryKeys);
@@ -382,20 +415,20 @@ export default function DashboardPage() {
           ) : detail ? (
             <>
               <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <h2 className="text-lg font-semibold">Columns of {selectedTable}</h2>
-                  <span className="text-xs text-gray-500">{activeColumns.length} columns</span>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                    <span>Operational: {detail.columns.length}</span>
+                    <span>Backup: {detail.backupColumns.length}</span>
+                    <span className={columnDifferenceCount > 0 ? 'font-semibold text-amber-700' : 'font-semibold text-emerald-700'}>
+                      {columnDifferenceCount === 0 ? 'Schemas match' : `${columnDifferenceCount} difference(s)`}
+                    </span>
+                  </div>
                 </div>
-                {activeColumns.length === 0 ? (
+                {columnComparison.length === 0 ? (
                   <p className="text-sm text-gray-500">No columns found.</p>
                 ) : (
-                  <ul className="grid max-h-[150px] gap-2 overflow-y-auto sm:grid-cols-2">
-                    {activeColumns.map((column) => (
-                      <li key={column.name} className="rounded-lg border border-gray-200 p-2 text-sm">
-                        <span className="font-medium">{column.name}</span>: <span className="text-gray-600">{column.type}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <ColumnComparisonTable columns={columnComparison} />
                 )}
               </div>
 
@@ -441,8 +474,8 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div className="mb-3 flex border-b border-gray-200" role="tablist" aria-label="Data preview">
-                <PreviewTabButton active={previewTab === 'source'} label="Operational" count={detail.sourceRowCount} disabled={detail.existsInSource === false} onClick={() => setPreviewTab('source')} />
-                <PreviewTabButton active={previewTab === 'backup'} label="Backup" count={detail.backupRowCount} disabled={detail.existsInBackup === false} onClick={() => setPreviewTab('backup')} />
+                <PreviewTabButton active={previewTab === 'source'} label="Operational" disabled={detail.existsInSource === false} onClick={() => setPreviewTab('source')} />
+                <PreviewTabButton active={previewTab === 'backup'} label="Backup" disabled={detail.existsInBackup === false} onClick={() => setPreviewTab('backup')} />
                 </div>
 
               <div>
@@ -495,8 +528,8 @@ function WorkspaceTabButton({ active, icon: Icon, label, onClick }: { active: bo
   return <button type="button" role="tab" aria-selected={active} onClick={onClick} className={`flex h-12 items-center gap-2 border-b-2 px-4 text-sm font-medium ${active ? 'border-blue-700 text-blue-700' : 'border-transparent text-gray-600 hover:text-gray-950'}`}><Icon className="h-4 w-4" />{label}</button>;
 }
 
-function PreviewTabButton({ active, label, count, disabled, onClick }: { active: boolean; label: string; count: string | null; disabled?: boolean; onClick: () => void }) {
-  return <button type="button" role="tab" aria-selected={active} disabled={disabled} onClick={onClick} className={`border-b-2 px-4 py-3 text-sm font-medium disabled:cursor-not-allowed disabled:text-gray-300 ${active ? 'border-blue-700 text-blue-700' : 'border-transparent text-gray-600 hover:text-gray-950'}`}>{label}<span className="ml-2 bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">{count ?? '0'}</span></button>;
+function PreviewTabButton({ active, label, disabled, onClick }: { active: boolean; label: string; disabled?: boolean; onClick: () => void }) {
+  return <button type="button" role="tab" aria-selected={active} disabled={disabled} onClick={onClick} className={`border-b-2 px-4 py-3 text-sm font-medium disabled:cursor-not-allowed disabled:text-gray-300 ${active ? 'border-blue-700 text-blue-700' : 'border-transparent text-gray-600 hover:text-gray-950'}`}>{label}</button>;
 }
 
 function Metric({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
@@ -510,6 +543,44 @@ function DiffMetric({ label, value, tone }: { label: string; value: number; tone
 
 function DatabaseLabel({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0 bg-gray-50 p-4"><p className="font-medium text-gray-500">{label}</p><p className="mt-1 truncate font-mono text-gray-700" title={value}>{value}</p></div>;
+}
+
+function ColumnComparisonTable({ columns }: { columns: ColumnComparison[] }) {
+  return (
+    <div className="max-h-[320px] overflow-auto border border-gray-200">
+      <table className="min-w-full border-collapse text-left text-xs">
+        <thead className="sticky top-0 z-10 bg-gray-100 text-gray-600">
+          <tr>
+            <th className="border-b border-r border-gray-200 px-3 py-2.5 font-semibold">Column</th>
+            <th className="border-b border-r border-gray-200 px-3 py-2.5 font-semibold">Operational</th>
+            <th className="border-b border-r border-gray-200 px-3 py-2.5 font-semibold">Backup</th>
+            <th className="border-b border-gray-200 px-3 py-2.5 font-semibold">Status</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100 bg-white">
+          {columns.map((column) => {
+            const differs = column.status !== 'match';
+            const statusLabel = column.status === 'match'
+              ? 'Match'
+              : column.status === 'typeMismatch'
+                ? 'Type differs'
+                : column.status === 'onlySource'
+                  ? 'Operational only'
+                  : 'Backup only';
+
+            return (
+              <tr key={column.name} className={differs ? 'bg-amber-50' : undefined}>
+                <td className="whitespace-nowrap border-r border-gray-100 px-3 py-2 font-mono font-semibold text-gray-900">{column.name}</td>
+                <td className={`whitespace-nowrap border-r border-gray-100 px-3 py-2 ${column.sourceType ? 'text-gray-700' : 'font-medium text-gray-500'}`}>{column.sourceType ?? 'Not present'}</td>
+                <td className={`whitespace-nowrap border-r border-gray-100 px-3 py-2 ${column.backupType ? 'text-gray-700' : 'font-medium text-gray-500'}`}>{column.backupType ?? 'Not present'}</td>
+                <td className={`whitespace-nowrap px-3 py-2 font-medium ${differs ? 'text-amber-800' : 'text-emerald-700'}`}>{statusLabel}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function DataPreview({ columns, rows }: { columns: ColumnInfo[]; rows: Record<string, unknown>[] }) {

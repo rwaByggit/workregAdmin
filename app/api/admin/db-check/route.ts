@@ -107,19 +107,19 @@ function expandEnvValue(value: string, values: Record<string, string>): string {
 }
 
 function readDatabaseConfig(role: DbRole): EnvDatabase {
-  const envFile = role === 'source' ? '.env' : '.env.backup';
+  const envFile = role === 'source' ? '.env.prod' : '.env.backup';
   const envPath = path.join(process.cwd(), envFile);
   const parsed = fs.existsSync(envPath) ? dotenv.parse(fs.readFileSync(envPath)) : {};
   const rawUrl = role === 'source'
     ? parsed.DATABASE_URL ?? process.env.DATABASE_URL
-    : process.env.BACKUP_DATABASE_URL
-      ?? process.env.DATABASE_URL_BACKUP
+    : parsed.DATABASE_URL
       ?? parsed.BACKUP_DATABASE_URL
-      ?? parsed.DATABASE_URL;
+      ?? process.env.BACKUP_DATABASE_URL
+      ?? process.env.DATABASE_URL_BACKUP;
 
   if (!rawUrl) {
     throw new Error(role === 'source'
-      ? 'DATABASE_URL was not found in .env'
+      ? 'DATABASE_URL was not found in .env.prod'
       : 'Backup database URL is not configured. Set BACKUP_DATABASE_URL, DATABASE_URL_BACKUP, or .env.backup DATABASE_URL.'
     );
   }
@@ -763,6 +763,7 @@ function compareExpectedToDb(expected: SchemaMap, actual: DbSchemaMap, migration
   const missingTables: MissingTable[] = [];
   const extraTables: ExtraTable[] = [];
   const missingColumns: Array<{ tableName: string; columnName: string; expectedType: string }> = [];
+  const extraColumns: Array<{ tableName: string; columnName: string; actualType: string }> = [];
   const typeMismatches: Array<{ tableName: string; columnName: string; expectedType: string; actualType: string }> = [];
   const expectedTableNames = new Set(expected.keys());
 
@@ -793,6 +794,16 @@ function compareExpectedToDb(expected: SchemaMap, actual: DbSchemaMap, migration
         });
       }
     });
+
+    actualColumns.forEach((actualColumn, columnName) => {
+      if (!expectedColumns.has(columnName)) {
+        extraColumns.push({
+          tableName,
+          columnName,
+          actualType: actualColumn.data_type,
+        });
+      }
+    });
   });
 
   actual.forEach((_actualColumns, tableName) => {
@@ -806,8 +817,9 @@ function compareExpectedToDb(expected: SchemaMap, actual: DbSchemaMap, migration
     missingTables: sortMissingTablesForCreation(missingTables, actual),
     extraTables: extraTables.sort((left, right) => left.tableName.localeCompare(right.tableName)),
     missingColumns,
+    extraColumns,
     typeMismatches,
-    issueCount: missingTables.length + extraTables.length + missingColumns.length + typeMismatches.length,
+    issueCount: missingTables.length + extraTables.length + missingColumns.length + extraColumns.length + typeMismatches.length,
   };
 }
 
@@ -815,6 +827,7 @@ function compareDbToDb(source: DbSchemaMap, backup: DbSchemaMap, migrationScript
   const missingTables: MissingTable[] = [];
   const extraTables: ExtraTable[] = [];
   const missingColumns: Array<{ tableName: string; columnName: string; sourceType: string; repairSql: string }> = [];
+  const extraColumns: Array<{ tableName: string; columnName: string; backupType: string }> = [];
   const typeMismatches: Array<{ tableName: string; columnName: string; sourceType: string; backupType: string }> = [];
   const sourceTableNames = new Set(source.keys());
 
@@ -846,6 +859,16 @@ function compareDbToDb(source: DbSchemaMap, backup: DbSchemaMap, migrationScript
         });
       }
     });
+
+    backupColumns.forEach((backupColumn, columnName) => {
+      if (!sourceColumns.has(columnName)) {
+        extraColumns.push({
+          tableName,
+          columnName,
+          backupType: backupColumn.data_type,
+        });
+      }
+    });
   });
 
   backup.forEach((_backupColumns, tableName) => {
@@ -859,8 +882,9 @@ function compareDbToDb(source: DbSchemaMap, backup: DbSchemaMap, migrationScript
     missingTables: sortMissingTablesForCreation(missingTables, backup),
     extraTables: extraTables.sort((left, right) => left.tableName.localeCompare(right.tableName)),
     missingColumns,
+    extraColumns,
     typeMismatches,
-    issueCount: missingTables.length + extraTables.length + missingColumns.length + typeMismatches.length,
+    issueCount: missingTables.length + extraTables.length + missingColumns.length + extraColumns.length + typeMismatches.length,
   };
 }
 
@@ -946,21 +970,21 @@ function extractSupabaseProjectRefFromDatabaseUrl(value: string) {
 }
 
 function readSupabaseUrlConfig(role: DbRole) {
-  const env = readEnvFile('.env');
+  const env = readEnvFile('.env.prod');
   const backupEnv = role === 'backup' ? readEnvFile('.env.backup') : {};
 
   const candidates = role === 'source'
     ? [
-        ['NEXT_PUBLIC_SUPABASE_URL (.env)', process.env.NEXT_PUBLIC_SUPABASE_URL ?? env.NEXT_PUBLIC_SUPABASE_URL],
-        ['SUPABASE_URL (.env)', process.env.SUPABASE_URL ?? env.SUPABASE_URL],
+        ['NEXT_PUBLIC_SUPABASE_URL (.env.prod)', env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL],
+        ['SUPABASE_URL (.env.prod)', env.SUPABASE_URL ?? process.env.SUPABASE_URL],
       ]
     : [
         ['BACKUP_NEXT_PUBLIC_SUPABASE_URL', process.env.BACKUP_NEXT_PUBLIC_SUPABASE_URL],
         ['BACKUP_DATABASE_URL', process.env.BACKUP_DATABASE_URL],
         ['NEXT_PUBLIC_BACKUP_SUPABASE_URL', process.env.NEXT_PUBLIC_BACKUP_SUPABASE_URL],
-        ['BACKUP_NEXT_PUBLIC_SUPABASE_URL (.env)', env.BACKUP_NEXT_PUBLIC_SUPABASE_URL],
-        ['BACKUP_DATABASE_URL (.env)', env.BACKUP_DATABASE_URL],
-        ['NEXT_PUBLIC_BACKUP_SUPABASE_URL (.env)', env.NEXT_PUBLIC_BACKUP_SUPABASE_URL],
+        ['BACKUP_NEXT_PUBLIC_SUPABASE_URL (.env.prod)', env.BACKUP_NEXT_PUBLIC_SUPABASE_URL],
+        ['BACKUP_DATABASE_URL (.env.prod)', env.BACKUP_DATABASE_URL],
+        ['NEXT_PUBLIC_BACKUP_SUPABASE_URL (.env.prod)', env.NEXT_PUBLIC_BACKUP_SUPABASE_URL],
         ['NEXT_PUBLIC_SUPABASE_URL (.env.backup)', backupEnv.NEXT_PUBLIC_SUPABASE_URL],
         ['SUPABASE_URL (.env.backup)', backupEnv.SUPABASE_URL],
       ];

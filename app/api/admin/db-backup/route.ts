@@ -111,19 +111,19 @@ function expandEnvValue(value: string, values: Record<string, string>): string {
 }
 
 function readDatabaseConfig(role: DbRole): EnvDatabase {
-  const envFile = role === 'source' ? '.env' : '.env.backup';
+  const envFile = role === 'source' ? '.env.prod' : '.env.backup';
   const envPath = path.join(process.cwd(), envFile);
   const parsed = fs.existsSync(envPath) ? dotenv.parse(fs.readFileSync(envPath)) : {};
   const rawUrl = role === 'source'
     ? parsed.DATABASE_URL ?? process.env.DATABASE_URL
-    : process.env.BACKUP_DATABASE_URL
-      ?? process.env.DATABASE_URL_BACKUP
+    : parsed.DATABASE_URL
       ?? parsed.BACKUP_DATABASE_URL
-      ?? parsed.DATABASE_URL;
+      ?? process.env.BACKUP_DATABASE_URL
+      ?? process.env.DATABASE_URL_BACKUP;
 
   if (!rawUrl) {
     throw new Error(role === 'source'
-      ? 'DATABASE_URL was not found in .env'
+      ? 'DATABASE_URL was not found in .env.prod'
       : 'Backup database URL is not configured. Set BACKUP_DATABASE_URL, DATABASE_URL_BACKUP, or .env.backup DATABASE_URL.'
     );
   }
@@ -534,14 +534,20 @@ async function getDataPayload(request: NextRequest) {
       );
     }
 
-    const [data, sourceRowCount, backupRowCount, backupData] = await Promise.all([
-      fetchRows(source, table, limit, 0, sourceAccountScope),
-      accountId === null ? estimateRows(source, table) : countRows(source, table, sourceAccountScope),
+    const [sourceRows, sourceEstimate, backupEstimate, backupRows] = await Promise.all([
+      fetchRows(source, table, limit + 1, 0, sourceAccountScope),
+      estimateRows(source, table),
       backupHasTable
-        ? accountId === null ? estimateRows(backup, table) : countRows(backup, table, backupAccountScope)
+        ? estimateRows(backup, table)
         : Promise.resolve(null),
-      backupHasTable ? fetchRows(backup, table, limit, 0, backupAccountScope) : Promise.resolve([]),
+      backupHasTable ? fetchRows(backup, table, limit + 1, 0, backupAccountScope) : Promise.resolve([]),
     ]);
+    const data = sourceRows.slice(0, limit);
+    const backupData = backupRows.slice(0, limit);
+    const sourceRowCount = sourceRows.length <= limit ? BigInt(sourceRows.length) : sourceEstimate;
+    const backupRowCount = backupHasTable
+      ? backupRows.length <= limit ? BigInt(backupRows.length) : backupEstimate
+      : null;
 
     return NextResponse.json(serializeBigInt({
       sourceDatabase: sourceConfig.label,
