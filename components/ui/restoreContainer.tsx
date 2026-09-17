@@ -16,6 +16,7 @@ import {
   Search,
   Table2,
   X,
+  Database,
 } from 'lucide-react';
 import type { TableWorkspaceTab } from './workspaceTabs';
 
@@ -121,6 +122,7 @@ interface RestoreContainerProps {
   onToggleColumns: () => void;
   onPreviewTabChange: (tab: PreviewTab) => void;
   onReloadDetail: () => void;
+  onClearTable: () => void;
   onAccountChange: (accountId: string) => void;
   onRestoreRow: (row: Record<string, unknown>) => void;
 }
@@ -179,11 +181,13 @@ export function RestoreContainer({
   onToggleColumns,
   onPreviewTabChange,
   onReloadDetail,
+  onClearTable,
   onAccountChange,
   onRestoreRow,
 }: RestoreContainerProps) {
   const canFilterByAccount = Boolean(selectedInfo?.accountFilterSupported || detail?.accountFilterSupported);
   const selectedAccountLabel = listOfAccounts.find((account) => account.id === selectedAccount)?.name ?? selectedAccount;
+  const clearTargetLabel = previewTab === 'source' ? 'operational' : 'backup';
 
   return (
     <div className="mx-auto flex max-w-[1500px] gap-6 px-4 py-4 sm:px-6 md:items-start">
@@ -349,6 +353,15 @@ export function RestoreContainer({
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-lg font-semibold">Data of {selectedTable}</h3>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    title={`Clear ${clearTargetLabel} table`}
+                    disabled={loadingDetail || runningAction || !selectedTable}
+                    onClick={onClearTable}
+                    className="flex h-8 w-8 items-center justify-center border border-red-300 text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Database className="h-4 w-4" />
+                  </button>
                   <span className="text-xs text-gray-500">{activeRows.length} rows</span>
                   <button type="button" title="Reload preview" onClick={onReloadDetail} className="flex h-8 w-8 items-center justify-center border border-gray-300 text-gray-600 hover:bg-gray-50"><RefreshCw className="h-4 w-4" /></button>
                 </div>
@@ -414,6 +427,7 @@ function DatabaseLabel({ label, value }: { label: string; value: string }) {
 function ColumnComparisonTable({ columns }: { columns: ColumnComparison[] }) {
   return (
     <div id="column-comparison-table" className="max-h-[320px] overflow-auto border border-gray-200">
+        #section compare
       <table className="min-w-full border-collapse text-left text-xs">
         <thead className="sticky top-0 z-10 bg-gray-100 text-gray-600">
           <tr>

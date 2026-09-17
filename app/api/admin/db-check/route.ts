@@ -14,6 +14,7 @@ const PRISMA_SCHEMA_FILE = 'prisma/schema.prisma';
 const SCRIPT_SCAN_EXCLUDED_DIRS = new Set(['.git', '.next', 'node_modules']);
 const SCHEMA_DRIFT_IGNORED_TABLES = new Set(['_prisma_migrations']);
 const KEEP_ALIVE_ROW_ID = 1;
+const DATABASE_TIME_ZONE = process.env.DATABASE_TIME_ZONE ?? process.env.DB_TIMEZONE ?? 'UTC';
 
 type DbRole = 'source' | 'backup';
 
@@ -143,6 +144,10 @@ function createDb(config: EnvDatabase) {
     idle_timeout: 5,
     connect_timeout: 10,
     prepare: false,
+    connection: {
+      TimeZone: DATABASE_TIME_ZONE,
+      DateStyle: 'ISO, MDY',
+    },
   });
 }
 

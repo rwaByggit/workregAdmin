@@ -15,6 +15,7 @@ const DEFAULT_PREVIEW_LIMIT = 100;
 const MAX_PREVIEW_LIMIT = 1000;
 const RESTORE_CHUNK_SIZE = 200;
 const EXACT_COMPARISON_COUNT_LIMIT = BigInt(50000);
+const DATABASE_TIME_ZONE = process.env.DATABASE_TIME_ZONE ?? process.env.DB_TIMEZONE ?? 'UTC';
 
 type DbRole = 'source' | 'backup';
 type RestoreAreaId = 'work' | 'checklist' | 'car' | 'customer' | 'rental' | 'user';
@@ -430,6 +431,10 @@ function createDb(config: EnvDatabase) {
     idle_timeout: 5,
     connect_timeout: 10,
     prepare: false,
+    connection: {
+      TimeZone: DATABASE_TIME_ZONE,
+      DateStyle: 'ISO, MDY',
+    },
   });
 }
 
@@ -581,6 +586,13 @@ async function countRows(sql: SqlLike, table: string, accountScope?: AccountScop
   const rows = await sql.unsafe<CountResult[]>(
     `SELECT COUNT(*)::bigint AS count FROM ${quoteIdentifier(table)} t ${accountScope?.whereClause ?? ''}`,
     (accountScope?.values ?? []) as never[]
+  );
+  return rows[0]?.count ?? BigInt(0);
+}
+
+async function clearRows(sql: SqlLike, table: string) {
+  const rows = await sql.unsafe<CountResult[]>(
+    `WITH deleted AS (DELETE FROM ${quoteIdentifier(table)} RETURNING 1) SELECT COUNT(*)::bigint AS count FROM deleted`
   );
   return rows[0]?.count ?? BigInt(0);
 }
@@ -1524,6 +1536,42 @@ async function buildAreaPayload(area: AreaDefinition) {
   }
 }
 
+function parseClearRole(value: unknown): DbRole {
+  if (value === 'source' || value === 'backup') return value;
+  throw new Error('Invalid database role');
+}
+
+async function clearTableData(body: Record<string, unknown>) {
+  const table = typeof body.table === 'string' ? body.table.trim() : '';
+  const role = parseClearRole(body.role);
+
+  if (!table) {
+    return NextResponse.json({ error: 'Missing table name' }, { status: 400 });
+  }
+  assertIdentifier(table, 'table name');
+
+  const sourceConfig = readDatabaseConfig('source');
+  const backupConfig = readDatabaseConfig('backup');
+  assertDistinctDatabaseConfigs(sourceConfig, backupConfig);
+
+  const sql = createDb(role === 'source' ? sourceConfig : backupConfig);
+
+  try {
+    if (!(await tableExists(sql, table))) {
+      return NextResponse.json({ error: `Table "${table}" was not found.` }, { status: 404 });
+    }
+
+    const deletedRows = await clearRows(sql, table);
+    return NextResponse.json(serializeBigInt({
+      tableName: table,
+      role,
+      deletedRows,
+    }));
+  } finally {
+    await sql.end();
+  }
+}
+
 export async function GET(request: NextRequest) {
   const admin = await requireAdmin();
   if (admin.response) return admin.response;
@@ -1579,6 +1627,22 @@ export async function POST(request: NextRequest) {
     console.error('Error in DB restore POST:', error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to restore data' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const admin = await requireAdmin();
+  if (admin.response) return admin.response;
+
+  try {
+    const body = await request.json();
+    return await clearTableData(body);
+  } catch (error) {
+    console.error('Error in DB restore DELETE:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to clear table data' },
       { status: 500 }
     );
   }

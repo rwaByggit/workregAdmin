@@ -23,6 +23,9 @@ import { WorkspaceTabs, type TableWorkspaceTab, type WorkspaceTab } from '@/comp
 
 type Row = Record<string, unknown>;
 
+const TIMEZONE_DRIFT_MS = 60 * 60 * 1000;
+const ACCEPTED_TIMEZONE_DRIFTS_MS = new Set([TIMEZONE_DRIFT_MS, TIMEZONE_DRIFT_MS * 2]);
+
 async function readJson(response: Response) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -48,6 +51,10 @@ function isDateTimeColumn(type: string | undefined) {
   return Boolean(type && /\b(?:timestamp|date|time)\b/i.test(type));
 }
 
+function allowsTimezoneDrift(type: string | undefined) {
+  return Boolean(type && /\b(?:timestamp|time)\b/i.test(type));
+}
+
 function normalizeComparableValue(value: unknown, dateTimeColumn: boolean) {
   if (!dateTimeColumn || value === null || value === undefined) return value;
 
@@ -60,14 +67,30 @@ function normalizeComparableValue(value: unknown, dateTimeColumn: boolean) {
   return parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : value;
 }
 
+function valuesAreEqual(left: unknown, right: unknown, dateTimeColumn: boolean) {
+  if (!dateTimeColumn) return stableStringify(left) === stableStringify(right);
+
+  const leftTime = new Date(String(left)).getTime();
+  const rightTime = new Date(String(right)).getTime();
+
+  if (Number.isNaN(leftTime) || Number.isNaN(rightTime)) {
+    return stableStringify(left) === stableStringify(right);
+  }
+
+  const difference = Math.abs(leftTime - rightTime);
+  return difference === 0 || ACCEPTED_TIMEZONE_DRIFTS_MS.has(difference);
+}
+
 function rowsAreEqual(left: Row, right: Row, columns: ColumnInfo[]) {
   const typesByName = new Map(columns.map((column) => [column.name, column.type]));
   const names = new Set([...Object.keys(left), ...Object.keys(right)]);
 
   return Array.from(names).every((name) => {
     const dateTimeColumn = isDateTimeColumn(typesByName.get(name));
-    return stableStringify(normalizeComparableValue(left[name], dateTimeColumn))
-      === stableStringify(normalizeComparableValue(right[name], dateTimeColumn));
+    const timezoneDriftColumn = allowsTimezoneDrift(typesByName.get(name));
+    const leftValue = normalizeComparableValue(left[name], dateTimeColumn);
+    const rightValue = normalizeComparableValue(right[name], dateTimeColumn);
+    return valuesAreEqual(leftValue, rightValue, timezoneDriftColumn);
   });
 }
 
@@ -368,6 +391,38 @@ export default function DashboardPage() {
     }
   };
 
+  const clearTable = async () => {
+    if (activeTab === 'storage' || !selectedTable) return;
+
+    const role = previewTab === 'source' ? 'source' : 'backup';
+    const roleLabel = role === 'source' ? 'operational' : 'backup';
+    const confirmed = window.confirm(
+      `Clear all rows from ${roleLabel} table "${selectedTable}"? This cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setRunningAction(true);
+    setNotice(null);
+    try {
+      const route = activeTab === 'backup' ? 'db-backup' : 'db-restore';
+      const result = await readJson(await fetch(`/api/admin/${route}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: selectedTable, role }),
+      }));
+      await loadDetail(selectedTable, activeTab, accountFilterSupported ? selectedAccount : '');
+      setNotice({
+        kind: 'success',
+        text: `Cleared ${result.deletedRows ?? 0} row(s) from ${roleLabel} table ${selectedTable}.`,
+      });
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'The table clear failed.' });
+    } finally {
+      setRunningAction(false);
+    }
+  };
+
   if (status === 'loading') return <FullPageStatus label="Loading admin session..." />;
 
   if (status !== 'authenticated') {
@@ -440,6 +495,7 @@ export default function DashboardPage() {
           onToggleColumns={() => setColumnsExpanded((expanded) => !expanded)}
           onPreviewTabChange={setPreviewTab}
           onReloadDetail={() => void loadDetail(selectedTable, activeTab, accountFilterSupported ? selectedAccount : '')}
+          onClearTable={() => void clearTable()}
           onAccountChange={chooseAccount}
           onRestoreRow={(row) => void restoreRow(row)}
         />
