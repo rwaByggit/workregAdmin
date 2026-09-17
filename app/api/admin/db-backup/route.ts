@@ -43,6 +43,11 @@ interface BackupLogResult {
   createdAt: string;
 }
 
+interface LastBackupResult {
+  tableName: string;
+  createdAt: string;
+}
+
 interface EstimatedCountResult {
   estimate: bigint | null;
 }
@@ -59,6 +64,13 @@ interface ForeignKeyReference {
   constraintName: string;
   columns: string[];
   referencedTable: string;
+  referencedColumns: string[];
+}
+
+interface ReferencingForeignKey {
+  constraintName: string;
+  childTable: string;
+  childColumns: string[];
   referencedColumns: string[];
 }
 
@@ -338,6 +350,60 @@ async function getForeignKeys(sql: SqlLike, table: string) {
   return Array.from(foreignKeys.values());
 }
 
+async function getReferencingForeignKeys(sql: SqlLike, table: string) {
+  const rows = await sql<(ForeignKeyColumnInfo & { child_table: string })[]>`
+    SELECT
+      con.conname AS constraint_name,
+      child.relname AS child_table,
+      child_att.attname AS column_name,
+      parent.relname AS referenced_table,
+      parent_att.attname AS referenced_column,
+      keys.ordinality::integer AS ordinal_position
+    FROM pg_constraint con
+    JOIN pg_class child
+      ON child.oid = con.conrelid
+    JOIN pg_namespace child_ns
+      ON child_ns.oid = child.relnamespace
+    JOIN pg_class parent
+      ON parent.oid = con.confrelid
+    JOIN pg_namespace parent_ns
+      ON parent_ns.oid = parent.relnamespace
+    JOIN unnest(con.conkey, con.confkey) WITH ORDINALITY AS keys(child_attnum, parent_attnum, ordinality)
+      ON true
+    JOIN pg_attribute child_att
+      ON child_att.attrelid = child.oid
+      AND child_att.attnum = keys.child_attnum
+    JOIN pg_attribute parent_att
+      ON parent_att.attrelid = parent.oid
+      AND parent_att.attnum = keys.parent_attnum
+    WHERE con.contype = 'f'
+      AND child_ns.nspname = 'public'
+      AND parent_ns.nspname = 'public'
+      AND parent.relname = ${table}
+    ORDER BY con.conname, keys.ordinality;
+  `;
+
+  const foreignKeys = new Map<string, ReferencingForeignKey>();
+  rows.forEach((row) => {
+    const existing = foreignKeys.get(row.constraint_name);
+
+    if (existing) {
+      existing.childColumns.push(row.column_name);
+      existing.referencedColumns.push(row.referenced_column);
+      return;
+    }
+
+    foreignKeys.set(row.constraint_name, {
+      constraintName: row.constraint_name,
+      childTable: row.child_table,
+      childColumns: [row.column_name],
+      referencedColumns: [row.referenced_column],
+    });
+  });
+
+  return Array.from(foreignKeys.values());
+}
+
 async function countRows(sql: SqlLike, table: string, accountScope?: AccountScope | null) {
   const rows = await sql.unsafe<CountResult[]>(
     `SELECT COUNT(*)::bigint AS count FROM ${quoteIdentifier(table)} t ${accountScope?.whereClause ?? ''}`,
@@ -416,6 +482,14 @@ function buildSelectByKeysStatement(table: string, columns: string[], keys: unkn
   };
 }
 
+function buildDeleteByKeysStatement(table: string, columns: string[], keys: unknown[][]) {
+  const deleteByKeys = buildSelectByKeysStatement(table, columns, keys);
+  return {
+    query: deleteByKeys.query.replace(/^SELECT \* FROM /, 'DELETE FROM '),
+    values: deleteByKeys.values,
+  };
+}
+
 async function fetchRowsByKeys(
   sql: SqlLike,
   table: string,
@@ -426,6 +500,79 @@ async function fetchRowsByKeys(
 
   const select = buildSelectByKeysStatement(table, columns, keys);
   return sql.unsafe<Record<string, unknown>[]>(select.query, select.values as never[]);
+}
+
+async function removeReplaceStaleRows(
+  source: SqlLike,
+  backup: SqlLike,
+  table: string,
+  primaryKeys: string[],
+  accountScope?: AccountScope | null
+) {
+  let deletedRows = 0;
+  const skippedRows: SkippedRelatedRowResult[] = [];
+  const keysToDelete: unknown[][] = [];
+  const referencingForeignKeys = await getReferencingForeignKeys(backup, table);
+  const backupRowCount = await countRows(backup, table, accountScope);
+
+  for (let offset = 0; offset < Number(backupRowCount); offset += TRANSFER_CHUNK_SIZE) {
+    const backupRows = await fetchRows(backup, table, TRANSFER_CHUNK_SIZE, offset, accountScope);
+    if (backupRows.length === 0) break;
+
+    const backupKeys = backupRows.map((row) => primaryKeys.map((column) => row[column] ?? null));
+    const sourceRows = await fetchRowsByKeys(source, table, primaryKeys, backupKeys);
+    const sourceKeys = new Set(
+      sourceRows.map((row) => serializeKey(primaryKeys.map((column) => row[column] ?? null)))
+    );
+    let staleRows = backupRows.filter((row) => !sourceKeys.has(serializeKey(primaryKeys.map((column) => row[column] ?? null))));
+
+    for (const foreignKey of referencingForeignKeys) {
+      if (staleRows.length === 0) break;
+
+      const childKeys = staleRows.map((row) => foreignKey.referencedColumns.map((column) => row[column] ?? null));
+      const childRows = await fetchRowsByKeys(backup, foreignKey.childTable, foreignKey.childColumns, childKeys);
+      const referencedKeys = new Set(
+        childRows.map((row) => serializeKey(foreignKey.childColumns.map((column) => row[column] ?? null)))
+      );
+
+      const nextStaleRows: Record<string, unknown>[] = [];
+      staleRows.forEach((row) => {
+        const key = foreignKey.referencedColumns.map((column) => row[column] ?? null);
+        if (!referencedKeys.has(serializeKey(key))) {
+          nextStaleRows.push(row);
+          return;
+        }
+
+        skippedRows.push({
+          tableName: table,
+          referencedTable: foreignKey.childTable,
+          constraintName: foreignKey.constraintName,
+          key: describeKey(foreignKey.referencedColumns, key),
+          rows: 1,
+          reason: `Stale backup row was not deleted because it is still referenced by "${foreignKey.childTable}".`,
+        });
+      });
+
+      staleRows = nextStaleRows;
+    }
+
+    if (staleRows.length === 0) {
+      continue;
+    }
+
+    keysToDelete.push(...staleRows.map((row) => primaryKeys.map((column) => row[column] ?? null)));
+  }
+
+  for (let offset = 0; offset < keysToDelete.length; offset += TRANSFER_CHUNK_SIZE) {
+    const deleteStatement = buildDeleteByKeysStatement(table, primaryKeys, keysToDelete.slice(offset, offset + TRANSFER_CHUNK_SIZE));
+    const deleted = await backup.unsafe<CountResult[]>(
+      `${deleteStatement.query} RETURNING 1::bigint AS count`,
+      deleteStatement.values as never[]
+    );
+    deletedRows += deleted.length;
+  }
+
+  return { deletedRows, skippedRows };
 }
 
 async function ensureBackupLogTable(sql: SqlLike) {
@@ -458,6 +605,21 @@ async function createBackupLog(sql: SqlLike, table: string) {
   return rows[0] ?? null;
 }
 
+async function getLastBackupTimes(sql: SqlLike) {
+  const logTable = await tableExists(sql, 'tblbackup_log');
+  if (!logTable) return new Map<string, string>();
+
+  const rows = await sql.unsafe<LastBackupResult[]>(`
+    SELECT DISTINCT ON ("tableName")
+      "tableName",
+      "createdAt"::text AS "createdAt"
+    FROM "tblbackup_log"
+    ORDER BY "tableName", "createdAt" DESC, "id" DESC
+  `);
+
+  return new Map(rows.map((row) => [row.tableName, row.createdAt]));
+}
+
 async function getTablePayload() {
   const sourceConfig = readDatabaseConfig('source');
   const backupConfig = readDatabaseConfig('backup');
@@ -470,6 +632,7 @@ async function getTablePayload() {
       listTables(backup),
     ]);
     const backupTableSet = new Set(backupTables.map((table) => table.table_name));
+    const lastBackupTimes = await getLastBackupTimes(source);
 
     return {
       sourceDatabase: sourceConfig.label,
@@ -480,6 +643,7 @@ async function getTablePayload() {
           tableName: table.table_name,
           existsInBackup: backupTableSet.has(table.table_name),
           accountFilterSupported: hasKnownAccountScope(table.table_name, columns),
+          lastBackupAt: lastBackupTimes.get(table.table_name) ?? null,
         };
       })),
     };
@@ -858,14 +1022,14 @@ async function transferTable(body: Record<string, unknown>) {
 
     let transferred = 0;
     let backupLog: BackupLogResult | null = null;
+    let deletedStaleRows = 0;
     const syncedDependencies = new Map<string, number>();
     const skippedRows: SkippedRelatedRowResult[] = [];
     const syncedParentKeys = new Set<string>();
+    const insertMode: TransferMode = mode === 'replace' && primaryKeys.length > 0 ? 'upsert' : mode;
 
     await backup.begin(async (transaction) => {
-      await ensureBackupLogTable(transaction);
-
-      if (mode === 'replace') {
+      if (mode === 'replace' && primaryKeys.length === 0) {
         await transaction.unsafe(
           `DELETE FROM ${quoteIdentifier(table)} t ${backupAccountScope?.whereClause ?? ''}`,
           (backupAccountScope?.values ?? []) as never[]
@@ -889,13 +1053,20 @@ async function transferTable(body: Record<string, unknown>) {
           continue;
         }
 
-        const insert = buildInsertStatement(table, transferColumnNames, dependencySync.validRows, primaryKeys, mode);
+        const insert = buildInsertStatement(table, transferColumnNames, dependencySync.validRows, primaryKeys, insertMode);
         await transaction.unsafe(insert.query, insert.values as never[]);
         transferred += dependencySync.validRows.length;
       }
 
-      backupLog = await createBackupLog(transaction, table);
+      if (mode === 'replace' && primaryKeys.length > 0) {
+        const staleCleanup = await removeReplaceStaleRows(source, transaction, table, primaryKeys, backupAccountScope);
+        deletedStaleRows = staleCleanup.deletedRows;
+        skippedRows.push(...staleCleanup.skippedRows);
+      }
     });
+
+    await ensureBackupLogTable(source);
+    backupLog = await createBackupLog(source, table);
 
     const backupRowCount = await countRows(backup, table, backupAccountScope);
 
@@ -907,6 +1078,7 @@ async function transferTable(body: Record<string, unknown>) {
       sourceRowCount,
       backupRowCount,
       primaryKeys,
+      deletedStaleRows,
       syncedDependencies: Array.from(syncedDependencies.entries()).map(([tableName, rows]) => ({ tableName, rows })),
       skippedRows,
       backupLog,

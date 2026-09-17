@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { signOut, useSession } from 'next-auth/react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, ArchiveRestore, Check, ChevronRight, Database,
+  AlertTriangle, ArchiveRestore, Check, ChevronDown, ChevronRight, Database,
   DatabaseBackup, LogOut, RefreshCw, Search, Table2, X,
 } from 'lucide-react';
 
@@ -17,6 +17,7 @@ interface TableInfo {
   existsInBackup?: boolean;
   existsInSource?: boolean;
   accountFilterSupported: boolean;
+  lastBackupAt?: string | null;
 }
 
 interface ColumnInfo {
@@ -171,6 +172,18 @@ function displayValue(value: unknown) {
   return String(value);
 }
 
+function lastBackupTime(table?: TableInfo) {
+  if (!table?.lastBackupAt) return 'Never';
+
+  const backupDate = new Date(table.lastBackupAt);
+  if (Number.isNaN(backupDate.getTime())) return table.lastBackupAt;
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(backupDate);
+}
+
 export default function DashboardPage() {
   const { data: session, status } = useSession();
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('backup');
@@ -186,6 +199,7 @@ export default function DashboardPage() {
   const [transferMode, setTransferMode] = useState<TransferMode>('upsert');
   const [notice, setNotice] = useState<Notice | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [columnsExpanded, setColumnsExpanded] = useState(false);
 
   const loadDetail = useCallback(async (table: string, tab: WorkspaceTab) => {
     if (!table) return;
@@ -250,6 +264,7 @@ export default function DashboardPage() {
     [detail]
   );
   const columnDifferenceCount = columnComparison.filter((column) => column.status !== 'match').length;
+  const shouldShowColumnTable = columnsExpanded;
   const rowDiff = useMemo(() => {
     if (!detail) return null;
     return diffTableRows(detail.backupData, detail.data, detail.primaryKeys);
@@ -258,6 +273,10 @@ export default function DashboardPage() {
     selectedTable && detail && counterpartExists
     && (activeTab === 'backup' || detail.primaryKeys.length > 0)
   );
+
+  useEffect(() => {
+    setColumnsExpanded(columnDifferenceCount > 0);
+  }, [selectedTable, activeTab, columnDifferenceCount]);
 
   const selectTable = (table: string) => {
     setSelectedTable(table);
@@ -290,6 +309,22 @@ export default function DashboardPage() {
         body: JSON.stringify(body),
       }));
       const count = activeTab === 'backup' ? result.transferred : result.restoredRows;
+      if (activeTab === 'backup' && result.backupLog?.createdAt) {
+        setTables((currentTables) => currentTables.map((table) => table.tableName === selectedTable
+          ? { ...table, lastBackupAt: result.backupLog.createdAt }
+          : table
+        ));
+        setTablePayload((currentPayload) => currentPayload
+          ? {
+              ...currentPayload,
+              tables: currentPayload.tables.map((table) => table.tableName === selectedTable
+                ? { ...table, lastBackupAt: result.backupLog.createdAt }
+                : table
+              ),
+            }
+          : currentPayload
+        );
+      }
       await loadDetail(selectedTable, activeTab);
       setNotice({
         kind: 'success',
@@ -384,7 +419,7 @@ export default function DashboardPage() {
             <div className="min-w-0">
               <p className="text-xs font-medium uppercase text-blue-700">{activeTab === 'backup' ? 'Operational to backup' : 'Backup to operational'}</p>
               <h2 className="mt-1 truncate text-lg font-semibold">{selectedTable ? `Columns of ${selectedTable}` : 'Select a table'}</h2>
-              <p className="mt-2 text-sm text-gray-600">{activeTab === 'backup' ? 'Copy this table from the operational database into the backup database.' : 'Recover this table from backup into the operational database.'}</p>
+              <p className="mt-2 text-sm text-gray-600">{activeTab === 'backup' ? `Last backup: ${lastBackupTime(selectedInfo)}` : `Last backup: ${lastBackupTime(selectedInfo)}`}</p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center gap-2">
               {activeTab === 'backup' ? (
@@ -417,19 +452,33 @@ export default function DashboardPage() {
               <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <h2 className="text-lg font-semibold">Columns of {selectedTable}</h2>
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
-                    <span>Operational: {detail.columns.length}</span>
-                    <span>Backup: {detail.backupColumns.length}</span>
-                    <span className={columnDifferenceCount > 0 ? 'font-semibold text-amber-700' : 'font-semibold text-emerald-700'}>
-                      {columnDifferenceCount === 0 ? 'Schemas match' : `${columnDifferenceCount} difference(s)`}
-                    </span>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span>Operational: {detail.columns.length}</span>
+                      <span>Backup: {detail.backupColumns.length}</span>
+                      <span className={columnDifferenceCount > 0 ? 'font-semibold text-amber-700' : 'font-semibold text-emerald-700'}>
+                        {columnDifferenceCount === 0 ? 'Schemas match' : `${columnDifferenceCount} difference(s)`}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setColumnsExpanded((expanded) => !expanded)}
+                      className="inline-flex h-8 items-center gap-1 border border-gray-300 px-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      aria-expanded={shouldShowColumnTable}
+                      aria-controls="column-comparison-table"
+                    >
+                      {shouldShowColumnTable ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                      {shouldShowColumnTable ? 'Hide columns' : 'Show columns'}
+                    </button>
                   </div>
                 </div>
-                {columnComparison.length === 0 ? (
-                  <p className="text-sm text-gray-500">No columns found.</p>
-                ) : (
-                  <ColumnComparisonTable columns={columnComparison} />
-                )}
+                {shouldShowColumnTable ? (
+                  columnComparison.length === 0 ? (
+                    <p id="column-comparison-table" className="text-sm text-gray-500">No columns found.</p>
+                  ) : (
+                    <ColumnComparisonTable columns={columnComparison} />
+                  )
+                ) : null}
               </div>
 
               <div className="grid rounded-lg border border-gray-200 bg-white shadow-sm sm:grid-cols-3">
@@ -547,7 +596,7 @@ function DatabaseLabel({ label, value }: { label: string; value: string }) {
 
 function ColumnComparisonTable({ columns }: { columns: ColumnComparison[] }) {
   return (
-    <div className="max-h-[320px] overflow-auto border border-gray-200">
+    <div id="column-comparison-table" className="max-h-[320px] overflow-auto border border-gray-200">
       <table className="min-w-full border-collapse text-left text-xs">
         <thead className="sticky top-0 z-10 bg-gray-100 text-gray-600">
           <tr>
