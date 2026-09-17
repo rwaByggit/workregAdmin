@@ -26,6 +26,11 @@ interface StoragePayload {
   };
 }
 
+interface StorageAccount {
+  id: string;
+  name: string;
+}
+
 interface StorageObjectInfo {
   name: string;
   size: number | null;
@@ -89,7 +94,9 @@ function formatObjectDate(value: string | null) {
 
 export function StorageBackupPanel() {
   const [payload, setPayload] = useState<StoragePayload | null>(null);
+  const [accounts, setAccounts] = useState<StorageAccount[]>([]);
   const [selectedBucket, setSelectedBucket] = useState('');
+  const [selectedAccount, setSelectedAccount] = useState('');
   const [side, setSide] = useState<StorageSide>('source');
   const [objectsPayload, setObjectsPayload] = useState<StorageObjectsPayload | null>(null);
   const [counts, setCounts] = useState<StorageCountsPayload | null>(null);
@@ -110,7 +117,7 @@ export function StorageBackupPanel() {
     return Array.from(bucketSet).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }) || left.localeCompare(right));
   }, [payload]);
 
-  const loadObjects = useCallback(async (bucket: string, role: StorageSide) => {
+  const loadObjects = useCallback(async (bucket: string, role: StorageSide, accountId = selectedAccount) => {
     if (!bucket) return;
 
     setLoadingObjects(true);
@@ -118,6 +125,7 @@ export function StorageBackupPanel() {
     setNotice(null);
     try {
       const params = new URLSearchParams({ action: 'objects', bucket, role });
+      if (accountId) params.set('accountId', accountId);
       const result = await readJson(await fetch(`/api/admin/storage-backup?${params}`));
       setObjectsPayload(result as StorageObjectsPayload);
     } catch (error) {
@@ -125,18 +133,29 @@ export function StorageBackupPanel() {
     } finally {
       setLoadingObjects(false);
     }
-  }, []);
+  }, [selectedAccount]);
 
-  const loadCounts = useCallback(async (bucket: string) => {
+  const loadCounts = useCallback(async (bucket: string, accountId = selectedAccount) => {
     if (!bucket) return;
 
     try {
       const params = new URLSearchParams({ action: 'counts', bucket });
+      if (accountId) params.set('accountId', accountId);
       const result = await readJson(await fetch(`/api/admin/storage-backup?${params}`));
       setCounts(result as StorageCountsPayload);
     } catch (error) {
       setCounts(null);
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not load storage counts.' });
+    }
+  }, [selectedAccount]);
+
+  const loadAccounts = useCallback(async () => {
+    try {
+      const result = await readJson(await fetch('/api/admin/storage-backup?action=accounts')) as { accounts?: StorageAccount[] };
+      setAccounts(result.accounts ?? []);
+    } catch (error) {
+      setAccounts([]);
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not load accounts.' });
     }
   }, []);
 
@@ -176,7 +195,8 @@ export function StorageBackupPanel() {
 
   useEffect(() => {
     void loadStorage();
-  }, [loadStorage]);
+    void loadAccounts();
+  }, [loadAccounts, loadStorage]);
 
   const chooseBucket = (bucket: string) => {
     setSelectedBucket(bucket);
@@ -184,6 +204,16 @@ export function StorageBackupPanel() {
       loadCounts(bucket),
       loadObjects(bucket, side),
     ]);
+  };
+
+  const chooseAccount = (accountId: string) => {
+    setSelectedAccount(accountId);
+    if (selectedBucket) {
+      void Promise.all([
+        loadCounts(selectedBucket, accountId),
+        loadObjects(selectedBucket, side, accountId),
+      ]);
+    }
   };
 
   const chooseSide = (nextSide: StorageSide) => {
@@ -200,7 +230,7 @@ export function StorageBackupPanel() {
       const result = await readJson(await fetch('/api/admin/storage-backup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, buckets: targetBuckets }),
+        body: JSON.stringify({ action, buckets: targetBuckets, accountId: selectedAccount || null }),
       }));
       await Promise.all([
         loadStorage(selectedBucket),
@@ -260,7 +290,14 @@ export function StorageBackupPanel() {
             {buckets.map((bucket) => <option key={bucket} value={bucket}>{bucket}</option>)}
           </select>
         </label>
-
+        <label className="mt-4 block text-sm">
+          <span className="font-medium text-gray-700">Account</span>
+          <select value={selectedAccount} onChange={(event) => chooseAccount(event.target.value)} className="mt-2 h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-sm outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600">
+            <option value="">All accounts</option>
+            {accounts.length === 0 ? <option value="" disabled>No accounts found</option> : null}
+            {accounts.map((account) => <option key={account.id} value={account.id}>{account.name} ({account.id})</option>)}
+          </select>
+        </label>
         <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-2">
           <StorageMetric label="Source objects" count={sourceCount?.objectCount} bytes={sourceCount?.totalBytes} error={sourceCount?.error} />
           <StorageMetric label="Backup objects" count={backupCount?.objectCount} bytes={backupCount?.totalBytes} error={backupCount?.error} />
@@ -384,8 +421,7 @@ function PreviewCell({ path, bucket, role }: { path: string; bucket: string; rol
         title="Open preview"
         className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 disabled:opacity-50"
       >
-        <Icon className="h-4 w-4" />
-        {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+        {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> :  <Icon className="h-4 w-4" />}
       </button>
     </td>
   );
@@ -413,9 +449,7 @@ function StorageObjectTable({ objects, bucket, role }: { objects: StorageObjectI
               <td className="whitespace-nowrap border-r border-gray-100 px-3 py-2 text-gray-700">{formatBytes(object.size)}</td>
               <td className="max-w-48 truncate border-r border-gray-100 px-3 py-2 text-gray-700" title={object.mimeType ?? ''}>{object.mimeType ?? ''}</td>
               <td className="whitespace-nowrap px-3 py-2 text-gray-700">{formatObjectDate(object.updatedAt ?? object.createdAt)}</td>
-              <td className="whitespace-nowrap px-3 py-2 text-gray-700">
-                <PreviewCell path={object.name} bucket={bucket} role={role} />
-              </td>
+              <PreviewCell path={object.name} bucket={bucket} role={role} />
             </tr>
           ))}
         </tbody>

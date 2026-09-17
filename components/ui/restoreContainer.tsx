@@ -1,12 +1,17 @@
 'use client';
 
+import { Fragment, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ArchiveRestore,
   Check,
   ChevronDown,
   ChevronRight,
   DatabaseBackup,
+  Info,
   RefreshCw,
   Search,
   Table2,
@@ -49,6 +54,7 @@ export interface DetailPayload {
   backupRowCount: string | null;
   existsInBackup?: boolean;
   existsInSource?: boolean;
+  accountFilterSupported?: boolean;
   previewLimit: number;
 }
 
@@ -57,13 +63,15 @@ export interface Notice {
   text: string;
 }
 
+export type RowStatus = 'unchanged' | 'changed' | 'onlyBackup' | 'onlySource';
+
 export interface RowDiffResult {
   matchedRows: number;
   changedRows: number;
   onlyInBackup: number;
   onlyInSource: number;
   diffCount: number;
-  rowStatus: Map<string, 'unchanged' | 'changed' | 'onlyBackup' | 'onlySource'>;
+  rowStatus: Map<string, RowStatus>;
 }
 
 export interface ColumnComparison {
@@ -71,6 +79,11 @@ export interface ColumnComparison {
   sourceType: string | null;
   backupType: string | null;
   status: 'match' | 'typeMismatch' | 'onlySource' | 'onlyBackup';
+}
+
+export interface AccountOption {
+  id: string;
+  name: string | null;
 }
 
 interface RestoreContainerProps {
@@ -87,6 +100,8 @@ interface RestoreContainerProps {
   transferMode: TransferMode;
   notice: Notice | null;
   previewTab: PreviewTab;
+  listOfAccounts: AccountOption[];
+  selectedAccount: string;
   selectedInfo?: TableInfo;
   counterpartExists: boolean;
   activeColumns: ColumnInfo[];
@@ -95,6 +110,7 @@ interface RestoreContainerProps {
   columnDifferenceCount: number;
   shouldShowColumnTable: boolean;
   rowDiff: RowDiffResult | null;
+  backupRowStatuses: Map<Record<string, unknown>, RowStatus>;
   canRun: boolean;
   onRefreshTables: () => void;
   onSearchChange: (search: string) => void;
@@ -105,6 +121,8 @@ interface RestoreContainerProps {
   onToggleColumns: () => void;
   onPreviewTabChange: (tab: PreviewTab) => void;
   onReloadDetail: () => void;
+  onAccountChange: (accountId: string) => void;
+  onRestoreRow: (row: Record<string, unknown>) => void;
 }
 
 function displayValue(value: unknown) {
@@ -140,6 +158,8 @@ export function RestoreContainer({
   transferMode,
   notice,
   previewTab,
+  listOfAccounts,
+  selectedAccount,
   selectedInfo,
   counterpartExists,
   activeColumns,
@@ -148,6 +168,7 @@ export function RestoreContainer({
   columnDifferenceCount,
   shouldShowColumnTable,
   rowDiff,
+  backupRowStatuses,
   canRun,
   onRefreshTables,
   onSearchChange,
@@ -158,7 +179,12 @@ export function RestoreContainer({
   onToggleColumns,
   onPreviewTabChange,
   onReloadDetail,
+  onAccountChange,
+  onRestoreRow,
 }: RestoreContainerProps) {
+  const canFilterByAccount = Boolean(selectedInfo?.accountFilterSupported || detail?.accountFilterSupported);
+  const selectedAccountLabel = listOfAccounts.find((account) => account.id === selectedAccount)?.name ?? selectedAccount;
+
   return (
     <div className="mx-auto flex max-w-[1500px] gap-6 px-4 py-4 sm:px-6 md:items-start">
       <aside className="w-full shrink-0 rounded-lg border border-gray-200 bg-white p-4 shadow-sm md:w-1/4 md:sticky md:top-4">
@@ -264,7 +290,28 @@ export function RestoreContainer({
                 )
               ) : null}
             </div>
-
+            <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+              <label className="block text-sm">
+                <span className="font-medium text-gray-700">Account filter</span>
+                <select
+                  value={selectedAccount}
+                  onChange={(event) => onAccountChange(event.target.value)}
+                  disabled={!canFilterByAccount || listOfAccounts.length === 0 || loadingDetail}
+                  className="mt-2 h-10 w-full max-w-md border border-gray-300 bg-white px-3 text-sm outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
+                >
+                  <option value="">All accounts</option>
+                  {listOfAccounts.length === 0 ? <option value="" disabled>No accounts found</option> : null}
+                  {listOfAccounts.map((account) => (
+                    <option key={account.id} value={account.id}>{account.name ?? account.id} ({account.id})</option>
+                  ))}
+                </select>
+              </label>
+              <p className="mt-2 text-xs text-gray-500">
+                {canFilterByAccount
+                  ? `Showing ${selectedAccount ? selectedAccountLabel : 'all accounts'} in the preview and action.`
+                  : 'This table does not have a known account filter.'}
+              </p>
+            </div>
             <div className="grid rounded-lg border border-gray-200 bg-white shadow-sm sm:grid-cols-3">
               <Metric label="Operational rows" value={detail.sourceRowCount ?? (detail.existsInSource === false ? 'Missing' : '0')} />
               <Metric label="Backup rows" value={detail.backupRowCount ?? (detail.existsInBackup === false ? 'Missing' : '0')} />
@@ -308,14 +355,29 @@ export function RestoreContainer({
               </div>
               <div className="mb-3 flex border-b border-gray-200" role="tablist" aria-label="Data preview">
                 <PreviewTabButton active={previewTab === 'source'} label="Operational" disabled={detail.existsInSource === false} onClick={() => onPreviewTabChange('source')} />
-                <PreviewTabButton active={previewTab === 'backup'} label="Backup" disabled={detail.existsInBackup === false} onClick={() => onPreviewTabChange('backup')} />
+                <PreviewTabButton
+                  active={previewTab === 'backup'}
+                  label={rowDiff?.onlyInBackup ? `Backup (${rowDiff.onlyInBackup} missing in operational)` : 'Backup'}
+                  disabled={detail.existsInBackup === false}
+                  onClick={() => onPreviewTabChange('backup')}
+                />
               </div>
 
               <div>
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs text-gray-500">{activeColumns.length} columns, showing up to {detail.previewLimit} rows</p>
+                  <p className="text-xs text-gray-500">
+                    {activeColumns.length} columns, showing up to {detail.previewLimit} rows. Account:{' '}
+                    {canFilterByAccount && selectedAccount ? selectedAccountLabel : 'All accounts'}
+                  </p>
                 </div>
-                <DataPreview columns={activeColumns} rows={activeRows} />
+                <DataPreview
+                  columns={activeColumns}
+                  rows={activeRows}
+                  sortable={previewTab === 'backup'}
+                  rowStatuses={previewTab === 'backup' ? backupRowStatuses : undefined}
+                  restoring={runningAction}
+                  onRestoreRow={activeTab === 'restore' && previewTab === 'backup' ? onRestoreRow : undefined}
+                />
               </div>
             </div>
 
@@ -387,24 +449,201 @@ function ColumnComparisonTable({ columns }: { columns: ColumnComparison[] }) {
   );
 }
 
-function DataPreview({ columns, rows }: { columns: ColumnInfo[]; rows: Record<string, unknown>[] }) {
+function DataPreview({
+  columns,
+  rows,
+  sortable,
+  rowStatuses,
+  restoring,
+  onRestoreRow,
+}: {
+  columns: ColumnInfo[];
+  rows: Record<string, unknown>[];
+  sortable: boolean;
+  rowStatuses?: Map<Record<string, unknown>, RowStatus>;
+  restoring: boolean;
+  onRestoreRow?: (row: Record<string, unknown>) => void;
+}) {
+  const [sort, setSort] = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null);
+  const [expandedRow, setExpandedRow] = useState<Record<string, unknown> | null>(null);
+  const activeSort = sort && columns.some((column) => column.name === sort.column) ? sort : null;
+  const sortedRows = useMemo(() => {
+    if (!sortable || !activeSort) return rows;
+
+    const columnType = columns.find((column) => column.name === activeSort.column)?.type ?? '';
+    const direction = activeSort.direction === 'asc' ? 1 : -1;
+
+    return rows
+      .map((row, index) => ({ row, index }))
+      .sort((left, right) => {
+        const leftValue = left.row[activeSort.column];
+        const rightValue = right.row[activeSort.column];
+        const leftEmpty = leftValue === null || leftValue === undefined;
+        const rightEmpty = rightValue === null || rightValue === undefined;
+
+        if (leftEmpty || rightEmpty) {
+          if (leftEmpty && rightEmpty) return left.index - right.index;
+          return leftEmpty ? 1 : -1;
+        }
+
+        const comparison = comparePreviewValues(leftValue, rightValue, columnType);
+        return comparison === 0 ? left.index - right.index : comparison * direction;
+      })
+      .map(({ row }) => row);
+  }, [activeSort, columns, rows, sortable]);
+
   if (columns.length === 0) return <div className="border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">No table data is available on this side.</div>;
   if (rows.length === 0) return <div className="border border-gray-200 p-8 text-center text-sm text-gray-500">This table has no rows.</div>;
   return (
     <div className="max-h-[580px] overflow-auto border border-gray-200">
       <table className="min-w-full border-collapse text-left text-xs">
-        <thead className="sticky top-0 z-10 bg-gray-100 text-gray-600"><tr>{columns.map((column) => <th key={column.name} className="whitespace-nowrap border-b border-r border-gray-200 px-3 py-2.5 font-semibold last:border-r-0" title={column.type}>{column.name}</th>)}</tr></thead>
+        <thead className="sticky top-0 z-10 bg-gray-100 text-gray-600">
+          <tr>
+            {rowStatuses ? <th className="whitespace-nowrap border-b border-r border-gray-200 px-3 py-2.5 font-semibold">Diff</th> : null}
+            {columns.map((column) => {
+              const direction = activeSort?.column === column.name ? activeSort.direction : null;
+              const SortIcon = direction === 'asc' ? ArrowUp : direction === 'desc' ? ArrowDown : ArrowUpDown;
+
+              if (!sortable) {
+                return <th key={column.name} className="whitespace-nowrap border-b border-r border-gray-200 px-3 py-2.5 font-semibold last:border-r-0" title={column.type}>{column.name}</th>;
+              }
+
+              return (
+                <th
+                  key={column.name}
+                  className="whitespace-nowrap border-b border-r border-gray-200 p-0 font-semibold last:border-r-0"
+                  title={`${column.type}. Click to sort.`}
+                  aria-sort={direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : 'none'}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setSort({
+                      column: column.name,
+                      direction: direction === 'asc' ? 'desc' : 'asc',
+                    })}
+                    className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+                  >
+                    <span>{column.name}</span>
+                    <SortIcon className={`h-3.5 w-3.5 shrink-0 ${direction ? 'text-blue-700' : 'text-gray-400'}`} aria-hidden="true" />
+                  </button>
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
         <tbody className="divide-y divide-gray-100 bg-white">
-          {rows.map((row, index) => (
-            <tr key={index} className="hover:bg-blue-50/50">
-              {columns.map((column) => {
-                const value = displayValue(row[column.name]);
-                return <td key={column.name} className={`max-w-64 truncate border-r border-gray-100 px-3 py-2 last:border-r-0 ${row[column.name] === null ? 'italic text-gray-400' : 'text-gray-700'}`} title={value}>{value}</td>;
-              })}
-            </tr>
-          ))}
+          {sortedRows.map((row, index) => {
+            const status = rowStatuses?.get(row);
+            const isExpanded = expandedRow === row;
+            const rowClass = status === 'onlyBackup'
+              ? 'bg-red-50 hover:bg-red-100'
+              : status === 'changed'
+                ? 'bg-amber-50 hover:bg-amber-100'
+                : 'hover:bg-blue-50/50';
+
+            return (
+              <Fragment key={index}>
+                <tr className={rowClass}>
+                  {rowStatuses ? (
+                    <td className={`whitespace-nowrap border-r border-gray-100 px-3 py-2 font-semibold ${status === 'onlyBackup' ? 'text-red-700' : status === 'changed' ? 'text-amber-700' : 'text-emerald-700'}`}>
+                      {status === 'onlyBackup' ? '-' : status === 'changed' ? 'Changed' : 'v'}
+                      <button
+                        type="button"
+                        className="ml-2 inline-flex align-middle text-blue-600 hover:text-blue-800"
+                        aria-label={isExpanded ? 'Hide details' : 'View details'}
+                        aria-expanded={isExpanded}
+                        onClick={() => setExpandedRow(isExpanded ? null : row)}
+                      >
+                        <Info className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </td>
+                  ) : null}
+                  {columns.map((column) => {
+                    const value = displayValue(row[column.name]);
+                    return <td key={column.name} className={`max-w-64 truncate border-r border-gray-100 px-3 py-2 last:border-r-0 ${row[column.name] === null ? 'italic text-gray-400' : 'text-gray-700'}`} title={value}>{value}</td>;
+                  })}
+                </tr>
+                {isExpanded ? (
+                  <tr className="bg-blue-50/50">
+                    <td colSpan={columns.length + (rowStatuses ? 1 : 0)} className="border-t border-blue-100 px-3 py-3">
+                      <DataPreviewDetails columns={columns} row={row} status={status} restoring={restoring} onRestoreRow={onRestoreRow} />
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
+}
+
+function DataPreviewDetails({
+  columns,
+  row,
+  status,
+  restoring,
+  onRestoreRow,
+}: {
+  columns: ColumnInfo[];
+  row: Record<string, unknown>;
+  status?: RowStatus;
+  restoring: boolean;
+  onRestoreRow?: (row: Record<string, unknown>) => void;
+}) {
+  const statusLabel = status === 'onlyBackup'
+    ? 'Only in backup'
+    : status === 'changed'
+      ? 'Changed'
+      : status === 'onlySource'
+        ? 'Only operational'
+        : 'Unchanged';
+
+  return (
+    <div>
+      <div className="mb-2 text-xs font-semibold text-gray-700">Row details: {statusLabel}</div>
+      <button type="button" onClick={() => navigator.clipboard.writeText(JSON.stringify(row, null, 2))} className="mb-3 inline-flex items-center gap-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"><ArchiveRestore className="h-3.5 w-3.5" /> Copy JSON</button>
+      {onRestoreRow ? (
+        <button type="button" disabled={restoring} onClick={() => onRestoreRow(row)} className="mb-3 ml-2 inline-flex items-center gap-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
+          {restoring ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ArchiveRestore className="h-3.5 w-3.5" />} Restore row
+        </button>
+      ) : null}
+      <dl className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {columns.map((column) => {
+          const value = displayValue(row[column.name]);
+
+          return (
+            <div key={column.name} className="min-w-0 border border-blue-100 bg-white px-2 py-1.5">
+              <dt className="truncate font-mono text-[11px] font-semibold text-gray-500" title={column.name}>{column.name}</dt>
+              <dd className={`mt-1 break-words text-xs ${row[column.name] === null ? 'italic text-gray-400' : 'text-gray-800'}`}>{value}</dd>
+            </div>
+          );
+        })}
+      </dl>
+    </div>
+  );
+}
+
+function comparePreviewValues(left: unknown, right: unknown, columnType: string) {
+  const normalizedType = columnType.toLowerCase();
+
+  if (/int|numeric|decimal|real|double|float|serial|money/.test(normalizedType)) {
+    const leftNumber = Number(left);
+    const rightNumber = Number(right);
+    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber - rightNumber;
+  }
+
+  if (/date|time/.test(normalizedType)) {
+    const leftTime = new Date(String(left)).getTime();
+    const rightTime = new Date(String(right)).getTime();
+    if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime)) return leftTime - rightTime;
+  }
+
+  if (/bool/.test(normalizedType)) return Number(Boolean(left)) - Number(Boolean(right));
+
+  return displayValue(left).localeCompare(displayValue(right), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
 }

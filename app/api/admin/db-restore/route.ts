@@ -1410,6 +1410,71 @@ async function runTableRestore(body: Record<string, unknown>) {
   }
 }
 
+async function runRowRestore(body: Record<string, unknown>) {
+  const table = typeof body.table === 'string' ? body.table.trim() : '';
+  const key = body.key && typeof body.key === 'object' && !Array.isArray(body.key)
+    ? body.key as Record<string, unknown>
+    : null;
+
+  if (!table) throw new Error('Missing table');
+  if (!key) throw new Error('Missing row key');
+  assertIdentifier(table, 'table name');
+
+  const sourceConfig = readDatabaseConfig('source');
+  const backupConfig = readDatabaseConfig('backup');
+  assertDistinctDatabaseConfigs(sourceConfig, backupConfig);
+
+  const source = createDb(sourceConfig);
+  const backup = createDb(backupConfig);
+
+  try {
+    const [sourceExists, backupExists] = await Promise.all([
+      tableExists(source, table),
+      tableExists(backup, table),
+    ]);
+    if (!sourceExists) throw new Error(`Operational table "${table}" was not found.`);
+    if (!backupExists) throw new Error(`Backup table "${table}" was not found.`);
+
+    const [backupColumns, sourceColumns, primaryKeys] = await Promise.all([
+      getColumns(backup, table),
+      getColumns(source, table),
+      getPrimaryKeys(source, table),
+    ]);
+    if (primaryKeys.length === 0) throw new Error(`Operational table "${table}" has no primary key.`);
+    if (primaryKeys.some((column) => !Object.prototype.hasOwnProperty.call(key, column))) {
+      throw new Error('The row key does not contain every primary-key column.');
+    }
+
+    const rows = await fetchRowsByKeys(backup, table, primaryKeys, [primaryKeys.map((column) => key[column])]);
+    if (rows.length !== 1) throw new Error(rows.length === 0 ? 'The row was not found in backup.' : 'The row key is not unique.');
+
+    const missingSourceColumns = getMissingSourceColumnNames(backupColumns, sourceColumns);
+    if (missingSourceColumns.length > 0) {
+      throw new Error(`Operational table "${table}" is missing columns: ${missingSourceColumns.join(', ')}`);
+    }
+
+    let restoredRows = 0;
+    await source.begin(async (transaction) => {
+      const dependencySync = await syncForeignKeyParents(backup, transaction, table, rows);
+      if (dependencySync.validRows.length === 0) {
+        throw new Error(dependencySync.skippedRows[0]?.reason ?? 'The row could not be restored because a dependency is missing.');
+      }
+      const insert = buildInsertStatement(
+        table,
+        getTransferColumnNames(backupColumns, sourceColumns),
+        dependencySync.validRows,
+        primaryKeys
+      );
+      await transaction.unsafe(insert.query, insert.values as never[]);
+      restoredRows = dependencySync.validRows.length;
+    });
+
+    return { tableName: table, restoredRows };
+  } finally {
+    await Promise.all([source.end(), backup.end()]);
+  }
+}
+
 async function buildAreaPayload(area: AreaDefinition) {
   const sourceConfig = readDatabaseConfig('source');
   const backupConfig = readDatabaseConfig('backup');
@@ -1481,6 +1546,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
+
+    if (typeof body.table === 'string' && body.key && typeof body.key === 'object') {
+      return NextResponse.json(serializeBigInt(await runRowRestore(body)));
+    }
 
     if (typeof body.table === 'string' && typeof body.area !== 'string') {
       return NextResponse.json(serializeBigInt(await runTableRestore(body)));

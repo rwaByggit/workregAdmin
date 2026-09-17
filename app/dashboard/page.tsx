@@ -6,12 +6,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Database, DatabaseBackup, LogOut, RefreshCw } from 'lucide-react';
 import {
   RestoreContainer,
+  type AccountOption,
   type ColumnComparison,
   type ColumnInfo,
   type DetailPayload,
   type Notice,
   type PreviewTab,
   type RowDiffResult,
+  type RowStatus,
   type TableInfo,
   type TablePayload,
   type TransferMode,
@@ -133,8 +135,10 @@ export default function DashboardPage() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [columnsExpanded, setColumnsExpanded] = useState(false);
+  const [listOfAccounts, setListOfAccounts] = useState<AccountOption[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState('');
 
-  const loadDetail = useCallback(async (table: string, tab: TableWorkspaceTab) => {
+  const loadDetail = useCallback(async (table: string, tab: TableWorkspaceTab, accountId = '') => {
     if (!table) return;
     setLoadingDetail(true);
     setDetail(null);
@@ -142,6 +146,7 @@ export default function DashboardPage() {
     try {
       const route = tab === 'backup' ? 'db-backup' : 'db-restore';
       const params = new URLSearchParams({ action: 'data', table });
+      if (accountId) params.set('accountId', accountId);
       const result = await readJson(await fetch(`/api/admin/${route}?${params}`));
       setDetail(result as DetailPayload);
     } catch (error) {
@@ -151,7 +156,7 @@ export default function DashboardPage() {
     }
   }, []);
 
-  const loadTables = useCallback(async (tab: TableWorkspaceTab, currentSelection = '') => {
+  const loadTables = useCallback(async (tab: TableWorkspaceTab, currentSelection = '', accountId = '') => {
     setLoadingTables(true);
     setNotice(null);
     try {
@@ -165,7 +170,8 @@ export default function DashboardPage() {
         : nextTables[0]?.tableName ?? '';
       setSelectedTable(nextSelection);
       setPreviewTab(tab === 'backup' ? 'source' : 'backup');
-      if (nextSelection) await loadDetail(nextSelection, tab);
+      const supportsAccountFilter = nextTables.find((item) => item.tableName === nextSelection)?.accountFilterSupported ?? false;
+      if (nextSelection) await loadDetail(nextSelection, tab, supportsAccountFilter ? accountId : '');
       else setDetail(null);
     } catch (error) {
       setTables([]);
@@ -181,6 +187,19 @@ export default function DashboardPage() {
     if (status === 'authenticated' && activeTab !== 'storage') void loadTables(activeTab);
   }, [status, activeTab, loadTables]);
 
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+
+    void (async () => {
+      try {
+        const result = await readJson(await fetch('/api/admin/storage-backup?action=accounts'));
+        setListOfAccounts(result.accounts ?? []);
+      } catch {
+        setListOfAccounts([]);
+      }
+    })();
+  }, [status]);
+
   const filteredTables = useMemo(() => {
     const query = search.trim().toLowerCase();
     return query ? tables.filter((table) => table.tableName.toLowerCase().includes(query)) : tables;
@@ -190,6 +209,8 @@ export default function DashboardPage() {
   const counterpartExists = activeTab === 'backup'
     ? selectedInfo?.existsInBackup !== false
     : selectedInfo?.existsInSource !== false;
+  const accountFilterSupported = Boolean(selectedInfo?.accountFilterSupported || detail?.accountFilterSupported);
+  const selectedAccountLabel = listOfAccounts.find((account) => account.id === selectedAccount)?.name ?? selectedAccount;
   const activeColumns = previewTab === 'source' ? detail?.columns ?? [] : detail?.backupColumns ?? [];
   const activeRows = previewTab === 'source' ? detail?.data ?? [] : detail?.backupData ?? [];
   const columnComparison = useMemo(
@@ -202,6 +223,16 @@ export default function DashboardPage() {
     if (!detail) return null;
     return diffTableRows(detail.backupData, detail.data, detail.primaryKeys);
   }, [detail]);
+  const backupRowStatuses = useMemo(() => {
+    const statuses = new Map<Row, RowStatus>();
+    if (!detail || !rowDiff) return statuses;
+
+    detail.backupData.forEach((row) => {
+      const status = rowDiff.rowStatus.get(buildRowKey(row, detail.primaryKeys));
+      if (status) statuses.set(row, status);
+    });
+    return statuses;
+  }, [detail, rowDiff]);
   const canRun = Boolean(
     activeTab !== 'storage' && selectedTable && detail && counterpartExists
     && (activeTab === 'backup' || detail.primaryKeys.length > 0)
@@ -213,9 +244,16 @@ export default function DashboardPage() {
 
   const selectTable = (table: string) => {
     if (activeTab === 'storage') return;
+    const supportsAccountFilter = tables.find((item) => item.tableName === table)?.accountFilterSupported ?? false;
     setSelectedTable(table);
     setPreviewTab(activeTab === 'backup' ? 'source' : 'backup');
-    void loadDetail(table, activeTab);
+    void loadDetail(table, activeTab, supportsAccountFilter ? selectedAccount : '');
+  };
+
+  const chooseAccount = (accountId: string) => {
+    setSelectedAccount(accountId);
+    if (!selectedTable || activeTab === 'storage') return;
+    void loadDetail(selectedTable, activeTab, accountFilterSupported ? accountId : '');
   };
 
   const changeWorkspace = (tab: WorkspaceTab) => {
@@ -235,9 +273,10 @@ export default function DashboardPage() {
     setNotice(null);
     try {
       const route = activeTab === 'backup' ? 'db-backup' : 'db-restore';
+      const accountId = accountFilterSupported ? selectedAccount || null : null;
       const body = activeTab === 'backup'
-        ? { table: selectedTable, mode: transferMode, accountId: null }
-        : { table: selectedTable, accountId: null };
+        ? { table: selectedTable, mode: transferMode, accountId }
+        : { table: selectedTable, accountId };
       const result = await readJson(await fetch(`/api/admin/${route}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -260,13 +299,44 @@ export default function DashboardPage() {
           : currentPayload
         );
       }
-      await loadDetail(selectedTable, activeTab);
+      await loadDetail(selectedTable, activeTab, accountId ?? '');
       setNotice({
         kind: 'success',
-        text: `${activeTab === 'backup' ? 'Backed up' : 'Restored'} ${count ?? 0} row(s) for ${selectedTable}.`,
+        text: `${activeTab === 'backup' ? 'Backed up' : 'Restored'} ${count ?? 0} row(s) for ${selectedTable}${accountId ? ` (${selectedAccountLabel})` : ''}.`,
       });
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'The operation failed.' });
+    } finally {
+      setRunningAction(false);
+    }
+  };
+
+  const restoreRow = async (row: Row) => {
+    if (activeTab !== 'restore') {
+      setNotice({ kind: 'error', text: 'Switch to the Restore workspace before restoring a backup row.' });
+      return;
+    }
+    if (!selectedTable || !detail?.primaryKeys.length) {
+      setNotice({ kind: 'error', text: 'This row cannot be restored because the table has no primary key.' });
+      return;
+    }
+
+    setRunningAction(true);
+    setNotice(null);
+    try {
+      const key = Object.fromEntries(detail.primaryKeys.map((column) => [column, row[column]]));
+      const result = await readJson(await fetch('/api/admin/db-restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: selectedTable, key }),
+      }));
+      await loadDetail(selectedTable, activeTab, accountFilterSupported ? selectedAccount : '');
+      setNotice({
+        kind: 'success',
+        text: `Restored ${result.restoredRows ?? 0} row(s) for ${selectedTable}.`,
+      });
+    } catch (error) {
+      setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'The row restore failed.' });
     } finally {
       setRunningAction(false);
     }
@@ -323,6 +393,8 @@ export default function DashboardPage() {
           transferMode={transferMode}
           notice={notice}
           previewTab={previewTab}
+          listOfAccounts={listOfAccounts}
+          selectedAccount={selectedAccount}
           selectedInfo={selectedInfo}
           counterpartExists={counterpartExists}
           activeColumns={activeColumns}
@@ -331,8 +403,9 @@ export default function DashboardPage() {
           columnDifferenceCount={columnDifferenceCount}
           shouldShowColumnTable={shouldShowColumnTable}
           rowDiff={rowDiff}
+          backupRowStatuses={backupRowStatuses}
           canRun={canRun}
-          onRefreshTables={() => void loadTables(activeTab, selectedTable)}
+          onRefreshTables={() => void loadTables(activeTab, selectedTable, selectedAccount)}
           onSearchChange={setSearch}
           onSelectTable={selectTable}
           onTransferModeChange={setTransferMode}
@@ -340,7 +413,9 @@ export default function DashboardPage() {
           onDismissNotice={() => setNotice(null)}
           onToggleColumns={() => setColumnsExpanded((expanded) => !expanded)}
           onPreviewTabChange={setPreviewTab}
-          onReloadDetail={() => void loadDetail(selectedTable, activeTab)}
+          onReloadDetail={() => void loadDetail(selectedTable, activeTab, accountFilterSupported ? selectedAccount : '')}
+          onAccountChange={chooseAccount}
+          onRestoreRow={(row) => void restoreRow(row)}
         />
       )}
 
@@ -355,8 +430,8 @@ export default function DashboardPage() {
                 <h2 id="confirm-title" className="font-semibold">Confirm {activeTab}</h2>
                 <p className="mt-2 text-sm leading-6 text-gray-600">
                   {activeTab === 'backup'
-                    ? `Copy all rows from ${selectedTable} to the backup database using ${transferMode} mode?`
-                    : `Restore all available rows for ${selectedTable} into the operational database? Existing rows with matching keys may be updated.`}
+                    ? `Copy ${accountFilterSupported && selectedAccount ? selectedAccountLabel : 'all accounts'} rows from ${selectedTable} to the backup database using ${transferMode} mode?`
+                    : `Restore ${accountFilterSupported && selectedAccount ? selectedAccountLabel : 'all accounts'} rows for ${selectedTable} into the operational database? Existing rows with matching keys may be updated.`}
                 </p>
               </div>
             </div>

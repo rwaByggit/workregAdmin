@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSystemAdmin as requireAdmin } from '@/app/lib/system-admin';
+import prisma from '@/app/lib/prisma';
 
 export const runtime = 'nodejs';
 
@@ -51,6 +52,20 @@ interface BucketObjectCount {
 }
 
 type StorageCopyDirection = 'backup' | 'restore';
+
+function parseAccountId(value: unknown) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(String(value).trim());
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function matchesAccountPath(objectPath: string, accountId: number) {
+  return objectPath.startsWith(`${accountId}/`) || objectPath.startsWith(`vognkort/${accountId}/`);
+}
+
+function filterObjectsByAccount(objects: StorageObject[], accountId: number | null) {
+  return accountId === null ? objects : objects.filter((object) => matchesAccountPath(object.name, accountId));
+}
 
 function formatStorageObject(object: StorageObject) {
   return {
@@ -285,9 +300,10 @@ async function copyBucket(
   bucket: string,
   fromLabel: string,
   toLabel: string,
+  accountId: number | null,
 ): Promise<BucketCopyResult> {
   await ensureDestinationBucket(from, to, bucket, fromLabel, toLabel);
-  const objects = await listBucketObjects(from, bucket);
+  const objects = filterObjectsByAccount(await listBucketObjects(from, bucket), accountId);
   const result: BucketCopyResult = { bucket, copied: 0, skipped: 0, failed: [] };
 
   for (const object of objects) {
@@ -317,6 +333,7 @@ async function getBucketObjectCount(
   client: SupabaseClient | null,
   bucket: string,
   configError: string | null,
+  accountId: number | null,
 ): Promise<BucketObjectCount> {
   if (!client) {
     return {
@@ -337,7 +354,7 @@ async function getBucketObjectCount(
     };
   }
 
-  const objects = await listBucketObjects(client, bucket);
+  const objects = filterObjectsByAccount(await listBucketObjects(client, bucket), accountId);
   return {
     exists: true,
     objectCount: objects.length,
@@ -376,13 +393,18 @@ export async function GET(request: NextRequest) {
     if (action === 'objects') {
       const role = request.nextUrl.searchParams.get('role') === 'backup' ? 'backup' : 'source';
       const bucket = request.nextUrl.searchParams.get('bucket')?.trim();
+      const accountIdValue = request.nextUrl.searchParams.get('accountId');
+      const accountId = parseAccountId(accountIdValue);
+      if (accountIdValue && accountId === null) {
+        return NextResponse.json({ error: 'Invalid accountId parameter' }, { status: 400 });
+      }
       if (!bucket) {
         return NextResponse.json({ error: 'Missing bucket parameter' }, { status: 400 });
       }
 
       const config = readStorageConfig(role);
       const client = createAdminClient(config);
-      const objects = await listBucketObjects(client, bucket);
+      const objects = filterObjectsByAccount(await listBucketObjects(client, bucket), accountId);
       return NextResponse.json({
         role,
         bucket,
@@ -400,19 +422,38 @@ export async function GET(request: NextRequest) {
 
     if (action === 'counts') {
       const bucket = request.nextUrl.searchParams.get('bucket')?.trim();
+      const accountIdValue = request.nextUrl.searchParams.get('accountId');
+      const accountId = parseAccountId(accountIdValue);
+      if (accountIdValue && accountId === null) {
+        return NextResponse.json({ error: 'Invalid accountId parameter' }, { status: 400 });
+      }
       if (!bucket) {
         return NextResponse.json({ error: 'Missing bucket parameter' }, { status: 400 });
       }
 
       const [sourceCount, backupCount] = await Promise.all([
-        getBucketObjectCount(source, bucket, sourceConfigState.error),
-        getBucketObjectCount(backup, bucket, backupConfigState.error),
+        getBucketObjectCount(source, bucket, sourceConfigState.error, accountId),
+        getBucketObjectCount(backup, bucket, backupConfigState.error, accountId),
       ]);
 
       return NextResponse.json({
         bucket,
         source: sourceCount,
         backup: backupCount,
+      });
+    }
+
+    if (action === 'accounts') {
+      const accounts = await prisma.tblaccount.findMany({
+        select: { id: true, name: true },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      });
+
+      return NextResponse.json({
+        accounts: accounts.map((account) => ({
+          id: account.id.toString(),
+          name: account.name?.trim() || `Account ${account.id}`,
+        })),
       });
     }
 
@@ -458,6 +499,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const buckets = normalizeBucketList(body.buckets);
     const direction: StorageCopyDirection = body.action === 'restore' ? 'restore' : 'backup';
+    const accountId = parseAccountId(body.accountId);
+    if (body.accountId !== null && body.accountId !== undefined && body.accountId !== '' && accountId === null) {
+      return NextResponse.json({ error: 'Invalid accountId parameter' }, { status: 400 });
+    }
     const source = createAdminClient(readStorageConfig('source'));
     const backup = createAdminClient(readStorageConfig('backup'));
     const from = direction === 'restore' ? backup : source;
@@ -467,7 +512,7 @@ export async function POST(request: NextRequest) {
     const results: BucketCopyResult[] = [];
 
     for (const bucket of buckets) {
-      results.push(await copyBucket(from, to, bucket, fromLabel, toLabel));
+      results.push(await copyBucket(from, to, bucket, fromLabel, toLabel, accountId));
     }
 
     return NextResponse.json({
