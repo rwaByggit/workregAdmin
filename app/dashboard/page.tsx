@@ -44,8 +44,31 @@ function buildRowKey(row: Row, primaryKeys: string[]) {
   return primaryKeys.map((key) => `${key}:${stableStringify(row[key])}`).join('|');
 }
 
-function rowsAreEqual(left: Row, right: Row) {
-  return stableStringify(left) === stableStringify(right);
+function isDateTimeColumn(type: string | undefined) {
+  return Boolean(type && /\b(?:timestamp|date|time)\b/i.test(type));
+}
+
+function normalizeComparableValue(value: unknown, dateTimeColumn: boolean) {
+  if (!dateTimeColumn || value === null || value === undefined) return value;
+
+  const parsed = value instanceof Date
+    ? value
+    : typeof value === 'string'
+      ? new Date(value)
+      : null;
+
+  return parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : value;
+}
+
+function rowsAreEqual(left: Row, right: Row, columns: ColumnInfo[]) {
+  const typesByName = new Map(columns.map((column) => [column.name, column.type]));
+  const names = new Set([...Object.keys(left), ...Object.keys(right)]);
+
+  return Array.from(names).every((name) => {
+    const dateTimeColumn = isDateTimeColumn(typesByName.get(name));
+    return stableStringify(normalizeComparableValue(left[name], dateTimeColumn))
+      === stableStringify(normalizeComparableValue(right[name], dateTimeColumn));
+  });
 }
 
 function compareColumns(sourceColumns: ColumnInfo[], backupColumns: ColumnInfo[]): ColumnComparison[] {
@@ -72,7 +95,8 @@ function compareColumns(sourceColumns: ColumnInfo[], backupColumns: ColumnInfo[]
 function diffTableRows(
   backupRows: Row[],
   sourceRows: Row[],
-  primaryKeys: string[]
+  primaryKeys: string[],
+  columns: ColumnInfo[]
 ): RowDiffResult {
   const sourceByKey = new Map<string, Row>();
   sourceRows.forEach((row) => sourceByKey.set(buildRowKey(row, primaryKeys), row));
@@ -91,7 +115,7 @@ function diffTableRows(
     if (!sourceRow) {
       rowStatus.set(key, 'onlyBackup');
       onlyInBackup++;
-    } else if (rowsAreEqual(backupRow, sourceRow)) {
+    } else if (rowsAreEqual(backupRow, sourceRow, columns)) {
       rowStatus.set(key, 'unchanged');
       matchedRows++;
     } else {
@@ -221,7 +245,12 @@ export default function DashboardPage() {
   const shouldShowColumnTable = columnsExpanded;
   const rowDiff = useMemo(() => {
     if (!detail) return null;
-    return diffTableRows(detail.backupData, detail.data, detail.primaryKeys);
+    return diffTableRows(
+      detail.backupData,
+      detail.data,
+      detail.primaryKeys,
+      [...detail.columns, ...detail.backupColumns]
+    );
   }, [detail]);
   const backupRowStatuses = useMemo(() => {
     const statuses = new Map<Row, RowStatus>();
@@ -312,10 +341,6 @@ export default function DashboardPage() {
   };
 
   const restoreRow = async (row: Row) => {
-    if (activeTab !== 'restore') {
-      setNotice({ kind: 'error', text: 'Switch to the Restore workspace before restoring a backup row.' });
-      return;
-    }
     if (!selectedTable || !detail?.primaryKeys.length) {
       setNotice({ kind: 'error', text: 'This row cannot be restored because the table has no primary key.' });
       return;
@@ -330,7 +355,8 @@ export default function DashboardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ table: selectedTable, key }),
       }));
-      await loadDetail(selectedTable, activeTab, accountFilterSupported ? selectedAccount : '');
+      const tableWorkspace = activeTab === 'backup' ? 'backup' : 'restore';
+      await loadDetail(selectedTable, tableWorkspace, accountFilterSupported ? selectedAccount : '');
       setNotice({
         kind: 'success',
         text: `Restored ${result.restoredRows ?? 0} row(s) for ${selectedTable}.`,

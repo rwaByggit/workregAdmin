@@ -376,7 +376,7 @@ export function RestoreContainer({
                   sortable={previewTab === 'backup'}
                   rowStatuses={previewTab === 'backup' ? backupRowStatuses : undefined}
                   restoring={runningAction}
-                  onRestoreRow={activeTab === 'restore' && previewTab === 'backup' ? onRestoreRow : undefined}
+                  onRestoreRow={detail.primaryKeys.length > 0 ? onRestoreRow : undefined}
                 />
               </div>
             </div>
@@ -608,6 +608,8 @@ function DataPreviewDetails({
         <button type="button" disabled={restoring} onClick={() => onRestoreRow(row)} className="mb-3 ml-2 inline-flex items-center gap-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
           {restoring ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ArchiveRestore className="h-3.5 w-3.5" />} Restore row
         </button>
+      ) : onRestoreRow === undefined ? (
+        <p className="mb-3 text-xs text-gray-500">This row cannot be restored because the table has no primary key.</p>
       ) : null}
       <dl className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {columns.map((column) => {

@@ -42,6 +42,11 @@ interface TableNameResult {
   table_name: string;
 }
 
+interface LastBackupResult {
+  tableName: string;
+  createdAt: string;
+}
+
 interface AccountScope {
   whereClause: string;
   values: unknown[];
@@ -1117,6 +1122,19 @@ async function buildTableRestorePayload() {
       listTables(backup),
     ]);
     const sourceTableSet = new Set(sourceTables.map((table) => table.table_name));
+    const backupLogExists = await tableExists(source, 'tblbackup_log');
+    const lastBackupRows = backupLogExists
+      ? await source.unsafe<LastBackupResult[]>(`
+          SELECT DISTINCT ON ("tableName")
+            "tableName",
+            "createdAt"::text AS "createdAt"
+          FROM "tblbackup_log"
+          ORDER BY "tableName", "createdAt" DESC, "id" DESC
+        `)
+      : [];
+    const lastBackupTimes = new Map(
+      lastBackupRows.map((row) => [row.tableName, row.createdAt])
+    );
 
     const tables = await Promise.all(backupTables.map(async (table) => {
       const columns = await getColumns(backup, table.table_name);
@@ -1125,6 +1143,7 @@ async function buildTableRestorePayload() {
         tableName: table.table_name,
         existsInSource: sourceTableSet.has(table.table_name),
         accountFilterSupported: hasKnownAccountScope(table.table_name, columns),
+        lastBackupAt: lastBackupTimes.get(table.table_name) ?? null,
       };
     }));
 
