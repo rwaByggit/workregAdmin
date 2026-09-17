@@ -516,7 +516,7 @@ function DataPreview({ columns, rows }: { columns: ColumnInfo[]; rows: Record<st
   if (columns.length === 0) return <div className="border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">No table data is available on this side.</div>;
   if (rows.length === 0) return <div className="border border-gray-200 p-8 text-center text-sm text-gray-500">This table has no rows.</div>;
   return (
-    <div className="max-h-[480px] overflow-auto border border-gray-200">
+    <div className="max-h-[580px] overflow-auto border border-gray-200">
       <table className="min-w-full border-collapse text-left text-xs">
         <thead className="sticky top-0 z-10 bg-gray-100 text-gray-600"><tr>{columns.map((column) => <th key={column.name} className="whitespace-nowrap border-b border-r border-gray-200 px-3 py-2.5 font-semibold last:border-r-0" title={column.type}>{column.name}</th>)}</tr></thead>
         <tbody className="divide-y divide-gray-100 bg-white">
