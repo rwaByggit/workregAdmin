@@ -353,6 +353,26 @@ export async function GET(request: NextRequest) {
   try {
     const action = request.nextUrl.searchParams.get('action');
 
+    if (action === 'preview') {
+      const role = request.nextUrl.searchParams.get('role') === 'backup' ? 'backup' : 'source';
+      const bucket = request.nextUrl.searchParams.get('bucket')?.trim();
+      const objectPath = request.nextUrl.searchParams.get('path')?.trim();
+      if (!bucket || !objectPath) {
+        return NextResponse.json({ error: 'Missing bucket or path parameter' }, { status: 400 });
+      }
+
+      const client = createAdminClient(readStorageConfig(role));
+      const { data, error } = await client.storage.from(bucket).createSignedUrl(objectPath, 300);
+      if (error || !data?.signedUrl) {
+        return NextResponse.json(
+          { error: error?.message ?? `Could not create a preview URL for "${bucket}/${objectPath}".` },
+          { status: 404 },
+        );
+      }
+
+      return NextResponse.json({ url: data.signedUrl });
+    }
+
     if (action === 'objects') {
       const role = request.nextUrl.searchParams.get('role') === 'backup' ? 'backup' : 'source';
       const bucket = request.nextUrl.searchParams.get('bucket')?.trim();

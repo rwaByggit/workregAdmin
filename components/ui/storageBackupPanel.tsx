@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Check, HardDrive, RefreshCw, X } from 'lucide-react';
+import { FileText, Image as ImageIcon, Music, Video, File as FileIcon, Eye } from "lucide-react";
 
 interface Notice {
   kind: 'success' | 'error';
@@ -9,6 +10,7 @@ interface Notice {
 }
 
 type StorageSide = 'source' | 'backup';
+type FileKind = "image" | "pdf" | "text" | "audio" | "video" | "other";
 
 interface StoragePayload {
   sourceStorage: string;
@@ -304,7 +306,7 @@ export function StorageBackupPanel() {
           {loadingObjects ? (
             <div className="flex min-h-[420px] items-center justify-center gap-3 text-sm text-gray-500"><RefreshCw className="h-5 w-5 animate-spin" /> Loading storage objects...</div>
           ) : objectsPayload ? (
-            <StorageObjectTable objects={objectsPayload.objects} />
+            <StorageObjectTable objects={objectsPayload.objects} bucket={objectsPayload.bucket} role={objectsPayload.role} />
           ) : (
             <div className="flex min-h-[420px] flex-col items-center justify-center p-8 text-center text-gray-500"><HardDrive className="h-8 w-8" /><p className="mt-3 text-sm">Choose a storage container to view its content.</p></div>
           )}
@@ -331,8 +333,65 @@ function StorageMetric({ label, count, bytes, error }: { label: string; count?: 
     </div>
   );
 }
+function getFileKind(path: string): FileKind {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  if (["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp"].includes(ext)) return "image";
+  if (ext === "pdf") return "pdf";
+  if (["txt", "md", "csv", "log"].includes(ext)) return "text";
+  if (["mp3", "wav", "ogg", "m4a"].includes(ext)) return "audio";
+  if (["mp4", "webm", "mov", "avi"].includes(ext)) return "video";
+  return "other";
+}
 
-function StorageObjectTable({ objects }: { objects: StorageObjectInfo[] }) {
+const FILE_ICONS: Record<FileKind, React.ComponentType<{ className?: string }>> = {
+  image: ImageIcon,
+  pdf: FileText,
+  text: FileText,
+  audio: Music,
+  video: Video,
+  other: FileIcon,
+};
+
+function PreviewCell({ path, bucket, role }: { path: string; bucket: string; role: StorageSide }) {
+  const [loading, setLoading] = useState(false);
+  const kind = getFileKind(path);
+  const Icon = FILE_ICONS[kind];
+
+  const openPreview = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ action: 'preview', bucket, role, path });
+      const response = await fetch(`/api/admin/storage-backup?${params}`);
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || typeof result.url !== 'string') {
+        throw new Error(typeof result.error === 'string' ? result.error : 'Could not create a preview URL.');
+      }
+
+      window.open(result.url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Could not open the preview.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <td className="whitespace-nowrap px-3 py-2 text-gray-700">
+      <button
+        type="button"
+        onClick={() => void openPreview()}
+        disabled={loading}
+        title="Open preview"
+        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 disabled:opacity-50"
+      >
+        <Icon className="h-4 w-4" />
+        {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </td>
+  );
+}
+
+function StorageObjectTable({ objects, bucket, role }: { objects: StorageObjectInfo[]; bucket: string; role: StorageSide }) {
   if (objects.length === 0) return <div className="border border-gray-200 p-8 text-center text-sm text-gray-500">This storage container has no objects.</div>;
 
   return (
@@ -344,6 +403,7 @@ function StorageObjectTable({ objects }: { objects: StorageObjectInfo[] }) {
             <th className="whitespace-nowrap border-b border-r border-gray-200 px-3 py-2.5 font-semibold">Size</th>
             <th className="whitespace-nowrap border-b border-r border-gray-200 px-3 py-2.5 font-semibold">Type</th>
             <th className="whitespace-nowrap border-b border-gray-200 px-3 py-2.5 font-semibold">Updated</th>
+            <th className="whitespace-nowrap border-b border-gray-200 px-3 py-2.5 font-semibold">Preview</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100 bg-white">
@@ -353,6 +413,9 @@ function StorageObjectTable({ objects }: { objects: StorageObjectInfo[] }) {
               <td className="whitespace-nowrap border-r border-gray-100 px-3 py-2 text-gray-700">{formatBytes(object.size)}</td>
               <td className="max-w-48 truncate border-r border-gray-100 px-3 py-2 text-gray-700" title={object.mimeType ?? ''}>{object.mimeType ?? ''}</td>
               <td className="whitespace-nowrap px-3 py-2 text-gray-700">{formatObjectDate(object.updatedAt ?? object.createdAt)}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-gray-700">
+                <PreviewCell path={object.name} bucket={bucket} role={role} />
+              </td>
             </tr>
           ))}
         </tbody>
