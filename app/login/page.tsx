@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, FormEvent, useEffect } from 'react';
-import { signIn, signOut, useSession } from 'next-auth/react';
+import { signIn, useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import ForgotPasswordModal from '../components/ForgotPasswordModal';
 import VersionTag from '../components/VersionTag';
@@ -21,7 +21,6 @@ export default function LoginPage() {
   const [redirectUrl, setRedirectUrl] = useState<string>('');
   const [showForgotPassword, setShowForgotPassword] = useState<boolean>(false);
 
-  // Always show the login form when this route is opened directly.
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
     const redirect = searchParams.get('redirect');
@@ -30,7 +29,7 @@ export default function LoginPage() {
     }
 
     if (status === 'authenticated') {
-      signOut({ redirect: false });
+      router.push(redirect || '/dashboard');
       return;
     }
     

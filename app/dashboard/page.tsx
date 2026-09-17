@@ -51,6 +51,17 @@ interface Notice {
   text: string;
 }
 
+type Row = Record<string, unknown>;
+
+interface RowDiffResult {
+  matchedRows: number;
+  changedRows: number;
+  onlyInBackup: number;
+  onlyInSource: number;
+  diffCount: number;
+  rowStatus: Map<string, 'unchanged' | 'changed' | 'onlyBackup' | 'onlySource'>;
+}
+
 async function readJson(response: Response) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -59,6 +70,72 @@ async function readJson(response: Response) {
   return result;
 }
 
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+
+  const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`).join(',')}}`;
+}
+
+function buildRowKey(row: Row, primaryKeys: string[]) {
+  if (primaryKeys.length === 0) return stableStringify(row);
+  return primaryKeys.map((key) => `${key}:${stableStringify(row[key])}`).join('|');
+}
+
+function rowsAreEqual(left: Row, right: Row) {
+  return stableStringify(left) === stableStringify(right);
+}
+
+function diffTableRows(
+  backupRows: Row[],
+  sourceRows: Row[],
+  primaryKeys: string[]
+): RowDiffResult {
+  const sourceByKey = new Map<string, Row>();
+  sourceRows.forEach((row) => sourceByKey.set(buildRowKey(row, primaryKeys), row));
+
+  const rowStatus = new Map<string, 'unchanged' | 'changed' | 'onlyBackup' | 'onlySource'>();
+  let matchedRows = 0;
+  let changedRows = 0;
+  let onlyInBackup = 0;
+  const seenKeys = new Set<string>();
+
+  for (const backupRow of backupRows) {
+    const key = buildRowKey(backupRow, primaryKeys);
+    seenKeys.add(key);
+    const sourceRow = sourceByKey.get(key);
+
+    if (!sourceRow) {
+      rowStatus.set(key, 'onlyBackup');
+      onlyInBackup++;
+    } else if (rowsAreEqual(backupRow, sourceRow)) {
+      rowStatus.set(key, 'unchanged');
+      matchedRows++;
+    } else {
+      rowStatus.set(key, 'changed');
+      changedRows++;
+    }
+  }
+
+  let onlyInSource = 0;
+  for (const sourceRow of sourceRows) {
+    const key = buildRowKey(sourceRow, primaryKeys);
+    if (!seenKeys.has(key)) {
+      rowStatus.set(key, 'onlySource');
+      onlyInSource++;
+    }
+  }
+
+  return {
+    matchedRows,
+    changedRows,
+    onlyInBackup,
+    onlyInSource,
+    diffCount: changedRows + onlyInBackup + onlyInSource,
+    rowStatus,
+  };
+}
 function displayValue(value: unknown) {
   if (value === null) return 'null';
   if (value === undefined) return '';
@@ -140,6 +217,10 @@ export default function DashboardPage() {
     : selectedInfo?.existsInSource !== false;
   const activeColumns = previewTab === 'source' ? detail?.columns ?? [] : detail?.backupColumns ?? [];
   const activeRows = previewTab === 'source' ? detail?.data ?? [] : detail?.backupData ?? [];
+  const rowDiff = useMemo(() => {
+    if (!detail) return null;
+    return diffTableRows(detail.backupData, detail.data, detail.primaryKeys);
+  }, [detail]);
   const canRun = Boolean(
     selectedTable && detail && counterpartExists
     && (activeTab === 'backup' || detail.primaryKeys.length > 0)
@@ -227,11 +308,11 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="mx-auto grid max-w-[1500px] gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className="border border-gray-200 bg-white lg:sticky lg:top-4 lg:h-[calc(100vh-137px)]">
-          <div className="border-b border-gray-200 p-4">
+      <div className="mx-auto flex max-w-[1500px] gap-6 px-4 py-4 sm:px-6 md:items-start">
+        <aside className="w-full shrink-0 rounded-lg border border-gray-200 bg-white p-4 shadow-sm md:w-1/4 md:sticky md:top-4">
+          <div className="mb-4">
             <div className="flex items-center justify-between gap-3">
-              <div><h2 className="text-sm font-semibold">Tables</h2><p className="mt-0.5 text-xs text-gray-500">{tables.length} available</p></div>
+              <div><h2 className="text-lg font-semibold">Select table</h2><p className="mt-0.5 text-xs text-gray-500">{tables.length} available</p></div>
               <button type="button" title="Refresh table list" disabled={loadingTables} onClick={() => void loadTables(activeTab, selectedTable)} className="flex h-8 w-8 items-center justify-center border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50">
                 <RefreshCw className={`h-4 w-4 ${loadingTables ? 'animate-spin' : ''}`} />
               </button>
@@ -244,7 +325,7 @@ export default function DashboardPage() {
             </label>
           </div>
 
-          <div className="max-h-[60vh] overflow-y-auto lg:max-h-[calc(100vh-256px)]">
+          <div className="max-h-[500px] overflow-y-auto">
             {loadingTables && tables.length === 0 ? (
               <div className="flex items-center gap-2 p-4 text-sm text-gray-500"><RefreshCw className="h-4 w-4 animate-spin" /> Loading tables...</div>
             ) : filteredTables.length === 0 ? (
@@ -253,7 +334,7 @@ export default function DashboardPage() {
               const exists = activeTab === 'backup' ? table.existsInBackup !== false : table.existsInSource !== false;
               const active = table.tableName === selectedTable;
               return (
-                <button type="button" key={table.tableName} onClick={() => selectTable(table.tableName)} className={`flex w-full items-center gap-3 border-b border-gray-100 px-4 py-3 text-left text-sm ${active ? 'bg-blue-50 text-blue-900' : 'hover:bg-gray-50'}`}>
+                <button type="button" key={table.tableName} onClick={() => selectTable(table.tableName)} className={`flex w-full items-center gap-2 rounded-lg border p-2 text-left text-sm ${active ? 'border-blue-300 bg-blue-100 text-blue-900' : 'border-gray-200 hover:bg-yellow-50'}`}>
                   <Table2 className={`h-4 w-4 shrink-0 ${active ? 'text-blue-700' : 'text-gray-400'}`} />
                   <span className="min-w-0 flex-1 truncate font-mono text-xs">{table.tableName}</span>
                   {!exists ? <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" aria-label="Counterpart table missing" /> : null}
@@ -264,11 +345,12 @@ export default function DashboardPage() {
           </div>
         </aside>
 
-        <section className="min-w-0 border border-gray-200 bg-white">
-          <div className="flex flex-col gap-4 border-b border-gray-200 p-5 xl:flex-row xl:items-start xl:justify-between">
+        <section className="w-full min-w-0 space-y-4 md:w-2/3">
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
               <p className="text-xs font-medium uppercase text-blue-700">{activeTab === 'backup' ? 'Operational to backup' : 'Backup to operational'}</p>
-              <h2 className="mt-1 truncate font-mono text-xl font-semibold">{selectedTable || 'Select a table'}</h2>
+              <h2 className="mt-1 truncate text-lg font-semibold">{selectedTable ? `Columns of ${selectedTable}` : 'Select a table'}</h2>
               <p className="mt-2 text-sm text-gray-600">{activeTab === 'backup' ? 'Copy this table from the operational database into the backup database.' : 'Recover this table from backup into the operational database.'}</p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -284,6 +366,7 @@ export default function DashboardPage() {
                 {runningAction ? 'Working...' : activeTab === 'backup' ? 'Back up table' : 'Restore table'}
               </button>
             </div>
+            </div>
           </div>
 
           {notice ? (
@@ -298,11 +381,49 @@ export default function DashboardPage() {
             <div className="flex min-h-[420px] items-center justify-center gap-3 text-sm text-gray-500"><RefreshCw className="h-5 w-5 animate-spin" /> Loading table details...</div>
           ) : detail ? (
             <>
-              <div className="grid border-b border-gray-200 sm:grid-cols-3">
+              <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-semibold">Columns of {selectedTable}</h2>
+                  <span className="text-xs text-gray-500">{activeColumns.length} columns</span>
+                </div>
+                {activeColumns.length === 0 ? (
+                  <p className="text-sm text-gray-500">No columns found.</p>
+                ) : (
+                  <ul className="grid max-h-[150px] gap-2 overflow-y-auto sm:grid-cols-2">
+                    {activeColumns.map((column) => (
+                      <li key={column.name} className="rounded-lg border border-gray-200 p-2 text-sm">
+                        <span className="font-medium">{column.name}</span>: <span className="text-gray-600">{column.type}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="grid rounded-lg border border-gray-200 bg-white shadow-sm sm:grid-cols-3">
                 <Metric label="Operational rows" value={detail.sourceRowCount ?? (detail.existsInSource === false ? 'Missing' : '0')} />
                 <Metric label="Backup rows" value={detail.backupRowCount ?? (detail.existsInBackup === false ? 'Missing' : '0')} />
                 <Metric label="Primary key" value={detail.primaryKeys.length ? detail.primaryKeys.join(', ') : 'None'} mono />
               </div>
+
+              {rowDiff ? (
+                <div className="border-b border-gray-200 bg-gray-50 px-5 py-4">
+                  <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-semibold">Prod vs backup report</h3>
+                      <p className="mt-0.5 text-xs text-gray-500">Based on the loaded preview rows, up to {detail.previewLimit} from each side.</p>
+                    </div>
+                    <span className={`text-xs font-semibold ${rowDiff.diffCount === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {rowDiff.diffCount === 0 ? 'No differences in preview' : `${rowDiff.diffCount} difference(s) in preview`}
+                    </span>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <DiffMetric label="Unchanged" value={rowDiff.matchedRows} tone="good" />
+                    <DiffMetric label="Changed" value={rowDiff.changedRows} tone="warn" />
+                    <DiffMetric label="Only backup" value={rowDiff.onlyInBackup} tone="info" />
+                    <DiffMetric label="Only operational" value={rowDiff.onlyInSource} tone="info" />
+                  </div>
+                </div>
+              ) : null}
 
               {!counterpartExists ? (
                 <div className="m-5 flex gap-3 border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
@@ -311,17 +432,25 @@ export default function DashboardPage() {
                 </div>
               ) : null}
 
-              <div className="flex border-b border-gray-200 px-5 pt-3" role="tablist" aria-label="Data preview">
+              <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm" role="region" aria-label="Table data">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="text-lg font-semibold">Data of {selectedTable}</h3>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">{activeRows.length} rows</span>
+                    <button type="button" title="Reload preview" onClick={() => void loadDetail(selectedTable, activeTab)} className="flex h-8 w-8 items-center justify-center border border-gray-300 text-gray-600 hover:bg-gray-50"><RefreshCw className="h-4 w-4" /></button>
+                  </div>
+                </div>
+                <div className="mb-3 flex border-b border-gray-200" role="tablist" aria-label="Data preview">
                 <PreviewTabButton active={previewTab === 'source'} label="Operational" count={detail.sourceRowCount} disabled={detail.existsInSource === false} onClick={() => setPreviewTab('source')} />
                 <PreviewTabButton active={previewTab === 'backup'} label="Backup" count={detail.backupRowCount} disabled={detail.existsInBackup === false} onClick={() => setPreviewTab('backup')} />
-              </div>
+                </div>
 
-              <div className="p-5">
+              <div>
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div><h3 className="text-sm font-semibold">Data preview</h3><p className="mt-0.5 text-xs text-gray-500">{activeColumns.length} columns, showing up to {detail.previewLimit} rows</p></div>
-                  <button type="button" title="Reload preview" onClick={() => void loadDetail(selectedTable, activeTab)} className="flex h-8 w-8 items-center justify-center border border-gray-300 text-gray-600 hover:bg-gray-50"><RefreshCw className="h-4 w-4" /></button>
+                  <p className="text-xs text-gray-500">{activeColumns.length} columns, showing up to {detail.previewLimit} rows</p>
                 </div>
                 <DataPreview columns={activeColumns} rows={activeRows} />
+              </div>
               </div>
 
               <div className="grid gap-px border-t border-gray-200 bg-gray-200 text-xs sm:grid-cols-2">
@@ -372,6 +501,11 @@ function PreviewTabButton({ active, label, count, disabled, onClick }: { active:
 
 function Metric({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return <div className="border-b border-gray-200 p-4 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0"><p className="text-xs text-gray-500">{label}</p><p className={`mt-1 truncate text-sm font-semibold ${mono ? 'font-mono text-xs' : ''}`}>{value}</p></div>;
+}
+
+function DiffMetric({ label, value, tone }: { label: string; value: number; tone: 'good' | 'warn' | 'info' }) {
+  const toneClass = tone === 'good' ? 'text-emerald-700' : tone === 'warn' ? 'text-amber-700' : 'text-blue-700';
+  return <div className="border border-gray-200 bg-white px-3 py-2"><p className="text-xs text-gray-500">{label}</p><p className={`mt-1 text-base font-semibold ${toneClass}`}>{value}</p></div>;
 }
 
 function DatabaseLabel({ label, value }: { label: string; value: string }) {
